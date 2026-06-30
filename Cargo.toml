@@ -8,7 +8,10 @@ repository = "https://github.com/42Pupusas/glazier"
 readme = "README.md"
 keywords = ["egui", "eframe", "ui", "components", "gui"]
 categories = ["gui"]
-exclude = ["assets/", "PLAN.md"]
+exclude = ["PLAN.md"]
+
+[features]
+system-fonts = []
 
 [dependencies]
 egui = "0.34"

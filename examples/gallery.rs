@@ -360,7 +360,12 @@ fn main() -> eframe::Result {
     let mut state = State::default();
     eframe::run_ui_native("glazier gallery", options, move |ui, _frame| {
         if !themed {
-            glazier::install_fonts(ui.ctx());
+            let fonts = glazier::fonts::FontSet {
+                regular: include_bytes!("assets/fonts/OpenSans-Regular.ttf").to_vec(),
+                semibold: include_bytes!("assets/fonts/OpenSans-Semibold.ttf").to_vec(),
+                bold: include_bytes!("assets/fonts/OpenSans-Bold.ttf").to_vec(),
+            };
+            glazier::fonts::install_with(ui.ctx(), fonts);
             Icon::install(ui.ctx());
             ui.ctx().set_visuals(glazier::shadcn_visuals(dark));
             // Opinionated: prose & headings aren't drag-selectable by default.
