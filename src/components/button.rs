@@ -12,6 +12,7 @@
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2, Widget, WidgetText};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Seconds for the hover colour transition to complete (shadcn ~150ms).
@@ -73,53 +74,73 @@ impl Size {
     }
 }
 
-/// Resolved per-variant paint: background fill, border stroke, and text color.
-struct Paint {
-    fill: Color32,
-    stroke: Stroke,
-    text: Color32,
-    underline: bool,
+/// [`Button`]'s resolved per-variant paint — background fill, border stroke,
+/// text color, and whether the label is underlined ([`Variant::Link`]).
+///
+/// This is the *real* value [`Button`] paints with: [`Variant`] just picks
+/// reasonable defaults for it from the active [`Tokens`]. Reach in and change
+/// any field via [`Button::style`] — there's no separate, narrower override
+/// API to keep in sync with this one.
+#[derive(Clone, Copy, Debug)]
+pub struct ButtonStyle {
+    /// Background fill.
+    pub fill: Color32,
+    /// Border stroke (`Stroke::NONE` for filled/ghost variants).
+    pub stroke: Stroke,
+    /// Label + icon color.
+    pub text: Color32,
+    /// Whether the label is drawn with an underline ([`Variant::Link`]).
+    pub underline: bool,
+    /// Corner radius in points (defaults to [`Tokens::radius_md`]).
+    pub radius: u8,
 }
 
 impl Variant {
-    /// Resolve this variant against the active shadcn [`Tokens`].
-    fn paint(self, t: Tokens) -> Paint {
+    /// Resolve this variant's default [`ButtonStyle`] against the active
+    /// shadcn [`Tokens`].
+    fn paint(self, t: Tokens) -> ButtonStyle {
         match self {
-            Self::Default => Paint {
+            Self::Default => ButtonStyle {
                 fill: t.primary,
                 stroke: Stroke::NONE,
                 text: t.primary_foreground,
                 underline: false,
+                radius: t.radius_md(),
             },
-            Self::Secondary => Paint {
+            Self::Secondary => ButtonStyle {
                 fill: t.secondary,
                 stroke: Stroke::NONE,
                 text: t.secondary_foreground,
                 underline: false,
+                radius: t.radius_md(),
             },
-            Self::Destructive => Paint {
+            Self::Destructive => ButtonStyle {
                 fill: t.destructive,
                 stroke: Stroke::NONE,
                 text: t.destructive_foreground,
                 underline: false,
+                radius: t.radius_md(),
             },
-            Self::Outline => Paint {
+            Self::Outline => ButtonStyle {
                 fill: t.background,
                 stroke: Stroke::new(1.0, t.border),
                 text: t.foreground,
                 underline: false,
+                radius: t.radius_md(),
             },
-            Self::Ghost => Paint {
+            Self::Ghost => ButtonStyle {
                 fill: Color32::TRANSPARENT,
                 stroke: Stroke::NONE,
                 text: t.foreground,
                 underline: false,
+                radius: t.radius_md(),
             },
-            Self::Link => Paint {
+            Self::Link => ButtonStyle {
                 fill: Color32::TRANSPARENT,
                 stroke: Stroke::NONE,
                 text: t.foreground,
                 underline: true,
+                radius: t.radius_md(),
             },
         }
     }
@@ -151,6 +172,7 @@ pub struct Button {
     icon_start: Option<Icon>,
     icon_end: Option<Icon>,
     full_width: bool,
+    style_hook: StyleHook<ButtonStyle>,
 }
 
 impl Button {
@@ -163,6 +185,7 @@ impl Button {
             icon_start: None,
             icon_end: None,
             full_width: false,
+            style_hook: StyleHook::default(),
         }
     }
 
@@ -197,15 +220,24 @@ impl Button {
     }
 }
 
+impl Customize<ButtonStyle> for Button {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<ButtonStyle> {
+        &mut self.style_hook
+    }
+}
+
 impl Widget for Button {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
-        let Paint {
+        let mut style = self.variant.paint(tokens);
+        self.style_hook.apply(&mut style);
+        let ButtonStyle {
             fill,
             stroke,
             text,
             underline,
-        } = self.variant.paint(tokens);
+            radius,
+        } = style;
 
         // A `Link` is inline text (shadcn `p-0 h-auto`): no box padding and no
         // min-height, so it aligns to the surrounding text baseline rather than
@@ -217,7 +249,6 @@ impl Widget for Button {
             self.size.padding()
         };
         let min_height = if is_link { 0.0 } else { self.size.min_height() };
-        let radius = tokens.radius_md();
 
         // Lay the label out with the resolved text color.
         let rich = self.text.into_galley(

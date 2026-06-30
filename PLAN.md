@@ -9,6 +9,57 @@ clean (clippy pedantic+nursery) after each.
 
 ---
 
+## Customization audit (2026-06-30)
+
+While chasing full shadcn coverage, several components grew **one-off escape
+hatches**: `Spinner::color`, `Marker::color`, `Badge::dot`, `Message::bubble_fill`
+— each a bespoke `Option<Color32>` field + builder method covering whatever
+sliver of paint the author happened to expose that day. That's not a strategy,
+it's guesswork repeated per component, and it can never cover the field nobody
+guessed.
+
+**Rejected approach:** a `Fill`/`Outline`/`TextColor`/`Radius` blanket-trait set,
+one `Option<T>` per property, implemented per component. Tried it, reverted it —
+it's the *same* escape-hatch sprawl wearing a shared name. Still only covers
+the properties the trait author enumerated.
+
+**Adopted approach: [`Customize<T>`](src/customize.rs).** Every component that
+paints a surface already computes a **real, internal style value** from its
+`Variant` + the active `Tokens` before drawing — `Button` resolves a `Paint`,
+`Bubble` resolves a `Style`, most framed components build an `egui::Frame`
+directly. `Customize<T>` is one trait, one method (`.style(FnOnce(&mut T))`),
+that:
+
+1. Makes that internal record **public** (`ButtonStyle`, `BadgeStyle`, …) —
+   for components already built straight out of `egui::Frame` (`Card`,
+   `Alert`, `Popover`, …), `T` is `egui::Frame` itself, egui's own
+   field-complete style type, no new struct needed.
+2. Lets the caller's closure run against that value **after** the variant's
+   defaults are resolved and **before** it's painted — full access to every
+   field that exists, none hidden, none guessed.
+3. Is the same shape everywhere: one field (`style_hook: StyleHook<T>`), one
+   `impl Customize<T>`, one line in `Widget::ui`/`show` to `.apply()` it. The
+   `Decorate` trait already proved this pattern (one blanket trait, uniform
+   method name, identical everywhere) for *structural* wrapping; `Customize`
+   is the same idea for *paint*.
+
+**Reference implementations:** `Button`/`ButtonStyle`, `Badge`/`BadgeStyle`
+(non-Frame, hand-painted), `Card`/`egui::Frame` (Frame-backed). Both shapes
+are exercised in `src/customize.rs`'s doctest.
+
+**Migration backlog** (retrofit `Customize`, then delete the matching one-off
+method): `Spinner::color`, `Marker::color`, `Badge::dot` (status dot is a
+genuinely distinct sub-element, not the badge's own surface — keep as a
+bespoke method, *not* a `Customize` candidate), `Message::bubble_fill`,
+`Chart::color`, every `Frame::new()...show()` component not yet wired
+(`Alert`, `Popover`, `Dialog`, `Sheet`, `Drawer`, `Tooltip`, `HoverCard`,
+`DropdownMenu`, `Input`, `InputGroup`, `Textarea`, `Item`, `Empty`, `Sonner`,
+`ScrollArea`, `NavigationMenu`, `SidebarMenu`). Each is a 10-line change
+(struct field + trait impl + one `.apply()` call) — do them opportunistically
+when touching a component, not as a single giant patch.
+
+---
+
 ## Tier 0 — primitives (foundation the rest lean on)
 These are mostly thin wrappers over egui built-ins + glazier decorators. Fast wins
 that establish the styling vocabulary (variants, sizes, tokens).

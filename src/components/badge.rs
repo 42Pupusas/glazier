@@ -7,6 +7,7 @@
 use egui::{Color32, Response, Sense, Stroke, StrokeKind, Ui, Vec2, Widget, WidgetText};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// A leading status dot diameter (shadcn `size-2`).
@@ -32,6 +33,19 @@ pub enum Variant {
     Outline,
 }
 
+/// [`Badge`]'s resolved per-variant paint — background fill, border stroke,
+/// and the label/icon colour. The real value [`Badge`] paints with; reach in
+/// via [`Badge::style`].
+#[derive(Clone, Copy, Debug)]
+pub struct BadgeStyle {
+    /// Background fill.
+    pub fill: Color32,
+    /// Border stroke (`Stroke::NONE` for the filled variants).
+    pub stroke: Stroke,
+    /// Label + icon colour.
+    pub text: Color32,
+}
+
 /// A small rounded status label.
 ///
 /// ```no_run
@@ -50,6 +64,7 @@ pub struct Badge {
     dot: Option<Color32>,
     icon_start: Option<Icon>,
     icon_end: Option<Icon>,
+    style_hook: StyleHook<BadgeStyle>,
 }
 
 impl Badge {
@@ -61,6 +76,7 @@ impl Badge {
             dot: None,
             icon_start: None,
             icon_end: None,
+            style_hook: StyleHook::default(),
         }
     }
 
@@ -89,10 +105,16 @@ impl Badge {
     }
 }
 
+impl Customize<BadgeStyle> for Badge {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<BadgeStyle> {
+        &mut self.style_hook
+    }
+}
+
 impl Widget for Badge {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
-        let (fill, stroke, text_color) = match self.variant {
+        let (fill, stroke, text) = match self.variant {
             Variant::Default => (tokens.primary, Stroke::NONE, tokens.primary_foreground),
             Variant::Secondary => (tokens.secondary, Stroke::NONE, tokens.secondary_foreground),
             Variant::Destructive => (
@@ -106,6 +128,9 @@ impl Widget for Badge {
                 tokens.foreground,
             ),
         };
+        let mut style = BadgeStyle { fill, stroke, text };
+        self.style_hook.apply(&mut style);
+        let BadgeStyle { fill, stroke, text: text_color } = style;
 
         // shadcn badge: text-xs (12px) font-medium, px-2 py-0.5.
         let padding = Vec2::new(8.0, 3.0);

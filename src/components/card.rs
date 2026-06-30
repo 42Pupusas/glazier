@@ -7,6 +7,7 @@
 
 use egui::{Frame, Response, RichText, Stroke, Ui, Widget};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// A bordered card surface.
@@ -32,6 +33,7 @@ pub struct Card {
     description: Option<String>,
     footer: Option<String>,
     inner_margin: Option<egui::Margin>,
+    style_hook: StyleHook<Frame>,
 }
 
 impl Card {
@@ -68,11 +70,12 @@ impl Card {
     pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
         let tokens = Tokens::get(ui);
         let margin = self.inner_margin.unwrap_or_else(|| egui::Margin::same(20));
-        let frame = Frame::new()
+        let mut frame = Frame::new()
             .fill(tokens.card)
             .stroke(Stroke::new(1.0, tokens.border))
             .corner_radius(tokens.radius_4xl())
             .inner_margin(margin);
+        self.style_hook.apply(&mut frame);
 
         frame
             .show(ui, |ui| {
@@ -113,5 +116,11 @@ impl Widget for Card {
     /// Renders just the header slots. Use [`Card::show`] for body content.
     fn ui(self, ui: &mut Ui) -> Response {
         self.show(ui, |_| {})
+    }
+}
+
+impl Customize<Frame> for Card {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
     }
 }
