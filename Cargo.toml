@@ -1,0 +1,24 @@
+[package]
+name = "glazier"
+version = "0.1.0"
+edition = "2021"
+description = "shadcn/ui-inspired component set for egui/eframe"
+license = "MIT"
+repository = "https://github.com/42Pupusas/glazier"
+readme = "README.md"
+keywords = ["egui", "eframe", "ui", "components", "gui"]
+categories = ["gui"]
+exclude = ["assets/", "PLAN.md"]
+
+[dependencies]
+egui = "0.34"
+egui_extras = { version = "0.34", default-features = false, features = ["svg"] }
+
+[dev-dependencies]
+eframe = "0.34"
+
+[lints.clippy]
+style = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
