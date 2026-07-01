@@ -34,12 +34,28 @@ use crate::components::button::{Button, Size, Variant};
 use crate::components::dialog::{modal_shell, ModalStyle};
 use crate::customize::{Customize, StyleHook};
 use crate::fonts;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// shadcn `max-w-xs`: the dialog's content width target.
-const CONTENT_WIDTH: f32 = 320.0;
-/// Height of a `Size::Small` button (`h-8`) — the footer row's fixed height.
-const FOOTER_ROW_HEIGHT: f32 = 32.0;
+/// Overridable geometry for [`AlertDialog`] — reach in via
+/// [`AlertDialog::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct AlertDialogMetrics {
+    /// shadcn `max-w-xs`: the dialog's content width target.
+    pub content_width: f32,
+    /// Height of a `Size::Small` button (`h-8`) — the footer row's fixed
+    /// height.
+    pub footer_row_height: f32,
+}
+
+impl Default for AlertDialogMetrics {
+    fn default() -> Self {
+        Self {
+            content_width: 320.0,
+            footer_row_height: 32.0,
+        }
+    }
+}
 
 /// Which control the user activated to dismiss an [`AlertDialog`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,11 +74,18 @@ pub struct AlertDialog {
     cancel: String,
     action: String,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<AlertDialogMetrics>,
 }
 
 impl Customize<Frame> for AlertDialog {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<AlertDialogMetrics> for AlertDialog {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<AlertDialogMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -76,6 +99,7 @@ impl AlertDialog {
             cancel: "Cancel".to_owned(),
             action: "Continue".to_owned(),
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -104,6 +128,7 @@ impl AlertDialog {
     pub fn show(mut self, ctx: &egui::Context, open: &mut bool) -> Option<AlertChoice> {
         let id = egui::Id::new("glazier-alert-dialog");
         let style_hook = std::mem::take(&mut self.style_hook);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
 
         let mut choice = None;
         let out = modal_shell(
@@ -111,11 +136,11 @@ impl AlertDialog {
             id,
             *open,
             ModalStyle::Center,
-            CONTENT_WIDTH,
+            m.content_width,
             style_hook,
             |ui, tokens, width| {
                 ui.spacing_mut().item_spacing = Vec2::new(0.0, 24.0); // gap-6
-                self.body(ui, tokens, width, &mut choice);
+                self.body(ui, tokens, width, &mut choice, m);
                 #[cfg(test)]
                 {
                     let card = ui.min_rect().size();
@@ -145,6 +170,7 @@ impl AlertDialog {
         tokens: Tokens,
         width: f32,
         choice: &mut Option<AlertChoice>,
+        m: AlertDialogMetrics,
     ) {
         // Header: centered title + muted description (gap-1.5).
         ui.vertical_centered(|ui| {
@@ -173,7 +199,7 @@ impl AlertDialog {
             // it and the card would never shrink back after the window grows.
             // A bounded box keeps the row content-sized in both directions.
             ui.allocate_ui_with_layout(
-                Vec2::new(width, FOOTER_ROW_HEIGHT),
+                Vec2::new(width, m.footer_row_height),
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
                     ui.spacing_mut().item_spacing.x = 8.0; // gap-2

@@ -33,14 +33,29 @@ pub use crate::components::dialog::Side;
 use crate::components::dialog::{close_button, modal_shell, ModalStyle};
 use crate::customize::{Customize, StyleHook};
 use crate::fonts;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Long-axis length of the drag-handle grip pill (Vaul's `w-[100px]`-ish).
-const GRIP_LONG: f32 = 48.0;
-/// Short-axis thickness of the drag-handle grip pill.
-const GRIP_THICK: f32 = 5.0;
-/// Default cross-axis size for a left/right drawer (`max-w-sm`, 384px).
-const DEFAULT_WIDTH: f32 = 384.0;
+/// Overridable geometry for [`Drawer`] — reach in via [`Drawer::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct DrawerMetrics {
+    /// Long-axis length of the drag-handle grip pill (Vaul's `w-[100px]`-ish).
+    pub grip_long: f32,
+    /// Short-axis thickness of the drag-handle grip pill.
+    pub grip_thick: f32,
+    /// Default cross-axis size for a left/right drawer (`max-w-sm`, 384px).
+    pub default_width: f32,
+}
+
+impl Default for DrawerMetrics {
+    fn default() -> Self {
+        Self {
+            grip_long: 48.0,
+            grip_thick: 5.0,
+            default_width: 384.0,
+        }
+    }
+}
 
 /// An edge-anchored modal panel that slides in, with a drag-handle grip.
 #[must_use = "drawers do nothing unless you show them"]
@@ -52,11 +67,18 @@ pub struct Drawer {
     show_close: bool,
     show_grip: bool,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<DrawerMetrics>,
 }
 
 impl Customize<Frame> for Drawer {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<DrawerMetrics> for Drawer {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<DrawerMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -67,23 +89,25 @@ impl Drawer {
             title: Some(title.into()),
             description: None,
             side: Side::Bottom,
-            width: DEFAULT_WIDTH,
+            width: DrawerMetrics::default().default_width,
             show_close: false,
             show_grip: true,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
     /// Create a drawer with no header title (grip + body only).
-    pub const fn untitled() -> Self {
+    pub fn untitled() -> Self {
         Self {
             title: None,
             description: None,
             side: Side::Bottom,
-            width: DEFAULT_WIDTH,
+            width: DrawerMetrics::default().default_width,
             show_close: false,
             show_grip: true,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -133,6 +157,7 @@ impl Drawer {
         let id = egui::Id::new("glazier-drawer").with(self.title.as_deref().unwrap_or("untitled"));
         let side = self.side;
         let style_hook = std::mem::take(&mut self.style_hook);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
 
         let mut closed = false;
         let out = modal_shell(
@@ -149,14 +174,14 @@ impl Drawer {
                 // It only reads naturally on the vertical axis: above the body
                 // for a bottom drawer, below it for a top drawer.
                 let grip_here = self.show_grip && matches!(side, Side::Top | Side::Bottom);
-                if grip_here && side == Side::Bottom && grip(ui, tokens).clicked() {
+                if grip_here && side == Side::Bottom && grip(ui, tokens, m).clicked() {
                     closed = true;
                 }
 
                 self.header(ui, tokens, &mut closed);
                 let out = content(ui);
 
-                if grip_here && side == Side::Top && grip(ui, tokens).clicked() {
+                if grip_here && side == Side::Top && grip(ui, tokens, m).clicked() {
                     closed = true;
                 }
                 out
@@ -212,13 +237,16 @@ impl Drawer {
 
 /// Paint the centered horizontal drag-handle grip: a small rounded `muted`
 /// pill, the signature Vaul grabber. Returns its clickable response.
-fn grip(ui: &mut egui::Ui, tokens: Tokens) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_at_least(Vec2::new(ui.available_width(), GRIP_THICK), Sense::click());
+fn grip(ui: &mut egui::Ui, tokens: Tokens, m: DrawerMetrics) -> egui::Response {
+    let (rect, response) = ui.allocate_at_least(
+        Vec2::new(ui.available_width(), m.grip_thick),
+        Sense::click(),
+    );
     if ui.is_rect_visible(rect) {
-        let pill = egui::Rect::from_center_size(rect.center(), Vec2::new(GRIP_LONG, GRIP_THICK));
+        let pill =
+            egui::Rect::from_center_size(rect.center(), Vec2::new(m.grip_long, m.grip_thick));
         ui.painter()
-            .rect_filled(pill, GRIP_THICK / 2.0, tokens.muted);
+            .rect_filled(pill, m.grip_thick / 2.0, tokens.muted);
     }
     response.on_hover_cursor(egui::CursorIcon::Grab)
 }

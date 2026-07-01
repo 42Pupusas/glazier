@@ -73,7 +73,7 @@ pub mod typography;
 
 pub use accordion::{Accordion, AccordionMetrics};
 pub use alert::{Alert, AlertMetrics};
-pub use alert_dialog::AlertDialog;
+pub use alert_dialog::{AlertDialog, AlertDialogMetrics};
 pub use aspect_ratio::AspectRatio;
 pub use attachment::{Attachment, AttachmentMetrics};
 pub use avatar::Avatar;
@@ -94,7 +94,7 @@ pub use context_menu::ContextMenu;
 pub use data_table::{DataColumn, DataTable, DataTableMetrics};
 pub use date_picker::DatePicker;
 pub use dialog::Dialog;
-pub use drawer::Drawer;
+pub use drawer::{Drawer, DrawerMetrics};
 pub use dropdown_menu::DropdownMenu;
 pub use empty::{Empty, EmptyMetrics};
 pub use field::Field;
