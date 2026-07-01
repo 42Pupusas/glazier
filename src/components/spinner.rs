@@ -18,16 +18,33 @@
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2, Widget};
 
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// Default edge length in points — shadcn's `size-4`.
 const DEFAULT_SIZE: f32 = 16.0;
-/// Revolutions per second (CSS `animate-spin` is 1s per turn).
-const SPEED: f64 = 1.0;
-/// Fraction of the circle left open as the trailing gap.
-const GAP: f32 = 0.25;
-/// Number of straight segments approximating the arc.
-const STEPS: usize = 48;
+
+/// Overridable geometry/timing for [`Spinner`] — reach in via
+/// [`Spinner::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct SpinnerMetrics {
+    /// Revolutions per second (CSS `animate-spin` is 1s per turn).
+    pub speed: f64,
+    /// Fraction of the circle left open as the trailing gap.
+    pub gap: f32,
+    /// Number of straight segments approximating the arc.
+    pub steps: usize,
+}
+
+impl Default for SpinnerMetrics {
+    fn default() -> Self {
+        Self {
+            speed: 1.0,
+            gap: 0.25,
+            steps: 48,
+        }
+    }
+}
 
 /// [`Spinner`]'s resolved paint — stroke colour and thickness. The real value
 /// [`Spinner`] paints with; reach in via [`Spinner::style`].
@@ -44,6 +61,7 @@ pub struct SpinnerStyle {
 pub struct Spinner {
     size: f32,
     style_hook: StyleHook<SpinnerStyle>,
+    sizing_hook: SizingHook<SpinnerMetrics>,
 }
 
 impl Default for Spinner {
@@ -58,6 +76,7 @@ impl Spinner {
         Self {
             size: DEFAULT_SIZE,
             style_hook: StyleHook::default(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -74,6 +93,12 @@ impl Customize<SpinnerStyle> for Spinner {
     }
 }
 
+impl Sizeable<SpinnerMetrics> for Spinner {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<SpinnerMetrics> {
+        &mut self.sizing_hook
+    }
+}
+
 impl Widget for Spinner {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
@@ -83,13 +108,14 @@ impl Widget for Spinner {
         };
         self.style_hook.apply(&mut style);
         let SpinnerStyle { color, thickness } = style;
+        let m = crate::sizing::resolve(self.sizing_hook);
 
         let (rect, response) = ui.allocate_at_least(Vec2::splat(self.size), Sense::hover());
 
         if ui.is_rect_visible(rect) {
             let time = ui.input(|i| i.time);
             #[allow(clippy::cast_possible_truncation)]
-            let phase = (time * SPEED).rem_euclid(1.0) as f32; // 0..1 turn
+            let phase = (time * m.speed).rem_euclid(1.0) as f32; // 0..1 turn
             let start = phase * std::f32::consts::TAU;
 
             let center = rect.center();
@@ -97,12 +123,12 @@ impl Widget for Spinner {
             let stroke = Stroke::new(thickness, color);
 
             // Draw the arc as a fan of short segments (egui has no arc
-            // primitive). Leave `GAP` of the circle open as the tail.
-            let sweep = (1.0 - GAP) * std::f32::consts::TAU;
+            // primitive). Leave `m.gap` of the circle open as the tail.
+            let sweep = (1.0 - m.gap) * std::f32::consts::TAU;
             let mut prev = None;
-            for i in 0..=STEPS {
+            for i in 0..=m.steps {
                 #[allow(clippy::cast_precision_loss)]
-                let t = i as f32 / STEPS as f32;
+                let t = i as f32 / m.steps as f32;
                 let a = t.mul_add(sweep, start);
                 let p = center + radius * Vec2::angled(a);
                 if let Some(prev) = prev {

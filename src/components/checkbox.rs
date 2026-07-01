@@ -5,12 +5,30 @@
 
 use egui::{Response, Sense, Stroke, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// shadcn checkbox box size: 16px (`size-4`).
-const BOX: f32 = 16.0;
-/// Seconds for the on/off fill + check transition.
-const TOGGLE_TIME: f32 = 0.15;
+/// Overridable geometry/timing for [`Checkbox`] — reach in via
+/// [`Checkbox::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct CheckboxMetrics {
+    /// Box edge length (shadcn `size-4`).
+    pub box_size: f32,
+    /// Gap between the box and the trailing label.
+    pub label_gap: f32,
+    /// Seconds for the on/off fill + check transition.
+    pub toggle_time: f32,
+}
+
+impl Default for CheckboxMetrics {
+    fn default() -> Self {
+        Self {
+            box_size: 16.0,
+            label_gap: 8.0,
+            toggle_time: 0.15,
+        }
+    }
+}
 
 /// A boolean checkbox with an optional label.
 ///
@@ -26,6 +44,7 @@ const TOGGLE_TIME: f32 = 0.15;
 pub struct Checkbox<'a> {
     checked: &'a mut bool,
     label: Option<String>,
+    sizing_hook: SizingHook<CheckboxMetrics>,
 }
 
 impl<'a> Checkbox<'a> {
@@ -34,6 +53,7 @@ impl<'a> Checkbox<'a> {
         Self {
             checked,
             label: None,
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -44,12 +64,19 @@ impl<'a> Checkbox<'a> {
     }
 }
 
+impl Sizeable<CheckboxMetrics> for Checkbox<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<CheckboxMetrics> {
+        &mut self.sizing_hook
+    }
+}
+
 impl Widget for Checkbox<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(self.sizing_hook);
 
         // Lay out the label (if any) to size the click target.
-        let gap = 8.0;
+        let gap = m.label_gap;
         let galley = self.label.as_ref().map(|text| {
             ui.painter().layout_no_wrap(
                 text.clone(),
@@ -58,10 +85,10 @@ impl Widget for Checkbox<'_> {
             )
         });
         let label_w = galley.as_ref().map_or(0.0, |g| gap + g.size().x);
-        let height = galley.as_ref().map_or(BOX, |g| g.size().y.max(BOX));
+        let height = galley.as_ref().map_or(m.box_size, |g| g.size().y.max(m.box_size));
 
         let (rect, mut response) =
-            ui.allocate_at_least(Vec2::new(BOX + label_w, height), Sense::click());
+            ui.allocate_at_least(Vec2::new(m.box_size + label_w, height), Sense::click());
 
         if response.clicked() {
             *self.checked = !*self.checked;
@@ -71,12 +98,12 @@ impl Widget for Checkbox<'_> {
         // Eased on/off value so the fill, border and check glide in.
         let t = ui
             .ctx()
-            .animate_bool_with_time(response.id.with("on"), *self.checked, TOGGLE_TIME);
+            .animate_bool_with_time(response.id.with("on"), *self.checked, m.toggle_time);
 
         if ui.is_rect_visible(rect) {
             let box_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.left(), rect.center().y - BOX / 2.0),
-                Vec2::splat(BOX),
+                egui::pos2(rect.left(), rect.center().y - m.box_size / 2.0),
+                Vec2::splat(m.box_size),
             );
             let radius = tokens.radius_sm();
             let painter = ui.painter();
@@ -88,7 +115,7 @@ impl Widget for Checkbox<'_> {
             if t > 0.01 {
                 // Check mark draws in proportionally; colour fades with `t`.
                 let center = box_rect.center();
-                let s = BOX * 0.28;
+                let s = m.box_size * 0.28;
                 let col = tokens.primary_foreground.gamma_multiply(t);
                 let stroke = Stroke::new(2.0, col);
                 let p0 = egui::pos2(center.x - s, center.y + s * 0.1);

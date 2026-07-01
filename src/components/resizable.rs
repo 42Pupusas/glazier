@@ -9,6 +9,7 @@
 
 use egui::{CursorIcon, Response, Sense, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// Split orientation.
@@ -21,9 +22,24 @@ pub enum Direction {
     Vertical,
 }
 
-/// Divider thickness and its interactive hit-width.
-const DIVIDER: f32 = 1.0;
-const HIT: f32 = 11.0;
+/// Overridable geometry for [`Resizable`] — reach in via
+/// [`Resizable::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct ResizableMetrics {
+    /// Divider thickness.
+    pub divider: f32,
+    /// Interactive hit-width straddling the divider.
+    pub hit: f32,
+}
+
+impl Default for ResizableMetrics {
+    fn default() -> Self {
+        Self {
+            divider: 1.0,
+            hit: 11.0,
+        }
+    }
+}
 
 /// A two-pane resizable split.
 ///
@@ -46,6 +62,13 @@ pub struct Resizable {
     handle_grip: bool,
     size: Option<f32>,
     divider_color: Option<egui::Color32>,
+    sizing_hook: SizingHook<ResizableMetrics>,
+}
+
+impl Sizeable<ResizableMetrics> for Resizable {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<ResizableMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Resizable {
@@ -59,6 +82,7 @@ impl Resizable {
             handle_grip: false,
             size: None,
             divider_color: None,
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -103,12 +127,13 @@ impl Resizable {
 
     /// Render the two panes and the divider between them.
     pub fn show(
-        self,
+        mut self,
         ui: &mut Ui,
         first: impl FnOnce(&mut Ui),
         second: impl FnOnce(&mut Ui),
     ) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let id = ui.make_persistent_id(self.id_source);
         let horizontal = self.direction == Direction::Horizontal;
 
@@ -134,8 +159,8 @@ impl Resizable {
         };
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
 
-        let first_len = (along - DIVIDER) * fraction;
-        let second_len = (along - DIVIDER) - first_len;
+        let first_len = (along - m.divider) * fraction;
+        let second_len = (along - m.divider) - first_len;
 
         // Compute the three sub-rects.
         let (first_rect, divider_rect, second_rect) = if horizontal {
@@ -143,9 +168,9 @@ impl Resizable {
             let xd = x0 + first_len;
             (
                 egui::Rect::from_min_size(rect.left_top(), Vec2::new(first_len, cross)),
-                egui::Rect::from_min_size(egui::pos2(xd, rect.top()), Vec2::new(DIVIDER, cross)),
+                egui::Rect::from_min_size(egui::pos2(xd, rect.top()), Vec2::new(m.divider, cross)),
                 egui::Rect::from_min_size(
-                    egui::pos2(xd + DIVIDER, rect.top()),
+                    egui::pos2(xd + m.divider, rect.top()),
                     Vec2::new(second_len, cross),
                 ),
             )
@@ -154,9 +179,9 @@ impl Resizable {
             let yd = y0 + first_len;
             (
                 egui::Rect::from_min_size(rect.left_top(), Vec2::new(cross, first_len)),
-                egui::Rect::from_min_size(egui::pos2(rect.left(), yd), Vec2::new(cross, DIVIDER)),
+                egui::Rect::from_min_size(egui::pos2(rect.left(), yd), Vec2::new(cross, m.divider)),
                 egui::Rect::from_min_size(
-                    egui::pos2(rect.left(), yd + DIVIDER),
+                    egui::pos2(rect.left(), yd + m.divider),
                     Vec2::new(cross, second_len),
                 ),
             )
@@ -168,9 +193,9 @@ impl Resizable {
 
         // Interact over a wider hit-strip centred on the divider.
         let hit = if horizontal {
-            egui::Rect::from_center_size(divider_rect.center(), Vec2::new(HIT, cross))
+            egui::Rect::from_center_size(divider_rect.center(), Vec2::new(m.hit, cross))
         } else {
-            egui::Rect::from_center_size(divider_rect.center(), Vec2::new(cross, HIT))
+            egui::Rect::from_center_size(divider_rect.center(), Vec2::new(cross, m.hit))
         };
         let drag = ui.interact(hit, id.with("handle"), Sense::drag());
         let cursor = if horizontal {
@@ -187,7 +212,7 @@ impl Resizable {
             } else {
                 drag.drag_delta().y
             };
-            fraction = ((first_len + delta) / (along - DIVIDER))
+            fraction = ((first_len + delta) / (along - m.divider))
                 .clamp(self.min_fraction, 1.0 - self.min_fraction);
             ui.ctx().data_mut(|d| d.insert_temp(id, fraction));
         }

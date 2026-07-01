@@ -12,11 +12,26 @@
 
 use egui::{collapsing_header::CollapsingState, Response, Sense, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Per-section trigger height and chevron box.
-const TRIGGER_H: f32 = 44.0;
-const CHEVRON: f32 = 16.0;
+/// Overridable geometry for [`Accordion`] — reach in via [`Accordion::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct AccordionMetrics {
+    /// Per-section trigger row height.
+    pub trigger_h: f32,
+    /// Chevron box edge length.
+    pub chevron: f32,
+}
+
+impl Default for AccordionMetrics {
+    fn default() -> Self {
+        Self {
+            trigger_h: 44.0,
+            chevron: 16.0,
+        }
+    }
+}
 
 /// How many sections an [`Accordion`] may keep open at once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,6 +69,13 @@ pub struct Accordion<'a> {
     id_source: egui::Id,
     mode: Mode,
     sections: Vec<Section<'a>>,
+    sizing_hook: SizingHook<AccordionMetrics>,
+}
+
+impl Sizeable<AccordionMetrics> for Accordion<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<AccordionMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> Accordion<'a> {
@@ -64,6 +86,7 @@ impl<'a> Accordion<'a> {
             id_source: egui::Id::new(id_source),
             mode: Mode::default(),
             sections: Vec::new(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -83,8 +106,9 @@ impl<'a> Accordion<'a> {
     }
 
     /// Render the accordion.
-    pub fn show(self, ui: &mut Ui) -> Response {
+    pub fn show(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let base = ui.make_persistent_id(self.id_source);
         let n = self.sections.len();
 
@@ -97,7 +121,7 @@ impl<'a> Accordion<'a> {
                 // Trigger row. Interact under the section's persistent `id`
                 // (not an auto-id) so clicks survive layout shuffles — see the
                 // note in `collapsible.rs`.
-                let (_, rect) = ui.allocate_space(Vec2::new(ui.available_width(), TRIGGER_H));
+                let (_, rect) = ui.allocate_space(Vec2::new(ui.available_width(), m.trigger_h));
                 let header = ui.interact(rect, id, Sense::click());
                 if header.clicked() {
                     let opening = !state.is_open();
@@ -134,8 +158,8 @@ impl<'a> Accordion<'a> {
                     let ty = rect.center().y - galley.size().y / 2.0;
                     painter.galley(egui::pos2(rect.left(), ty), galley, text_col);
 
-                    let center = egui::pos2(rect.right() - CHEVRON / 2.0, rect.center().y);
-                    paint_chevron(painter, center, openness, tokens.muted_foreground);
+                    let center = egui::pos2(rect.right() - m.chevron / 2.0, rect.center().y);
+                    paint_chevron(painter, center, openness, tokens.muted_foreground, m.chevron);
                 }
 
                 // Body.
@@ -163,10 +187,17 @@ impl<'a> Accordion<'a> {
     }
 }
 
-/// Paint a chevron centred on `center`, rotating from down (`openness` 0) to up
-/// (`openness` 1) — shadcn's `[&[data-state=open]>svg]:rotate-180`.
-fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, openness: f32, color: egui::Color32) {
-    let half = CHEVRON * 0.28;
+/// Paint a chevron of edge length `size`, centred on `center`, rotating from
+/// down (`openness` 0) to up (`openness` 1) — shadcn's
+/// `[&[data-state=open]>svg]:rotate-180`.
+fn paint_chevron(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    openness: f32,
+    color: egui::Color32,
+    size: f32,
+) {
+    let half = size * 0.28;
     let dy = 2.0f32.mul_add(-openness, 1.0) * half * 0.6;
     let tip = egui::pos2(center.x, center.y + dy);
     let left = egui::pos2(center.x - half, center.y - dy);

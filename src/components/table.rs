@@ -26,16 +26,33 @@
 
 use egui::{Align, Color32, Response, RichText, Sense, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Cell height (shadcn rows are `h-12` ≈ 48px; tuned to the card body scale).
-const ROW_H: f32 = 40.0;
-/// Horizontal padding inside each cell (shadcn `px-2`, nudged up).
-const CELL_PAD_X: f32 = 10.0;
-/// Cell text size (shadcn `text-sm`).
-const TEXT_SIZE: f32 = 13.0;
-/// Gap between columns.
-const COL_GAP: f32 = 8.0;
+/// Overridable geometry for [`Table`] — reach in via [`Table::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct TableMetrics {
+    /// Cell height (shadcn rows are `h-12` ≈ 48px; tuned to the card body
+    /// scale).
+    pub row_h: f32,
+    /// Horizontal padding inside each cell (shadcn `px-2`, nudged up).
+    pub cell_pad_x: f32,
+    /// Cell text size (shadcn `text-sm`).
+    pub text_size: f32,
+    /// Gap between columns.
+    pub col_gap: f32,
+}
+
+impl Default for TableMetrics {
+    fn default() -> Self {
+        Self {
+            row_h: 40.0,
+            cell_pad_x: 10.0,
+            text_size: 13.0,
+            col_gap: 8.0,
+        }
+    }
+}
 
 /// How a column claims horizontal space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -62,6 +79,13 @@ pub struct Table {
     columns: Vec<Column>,
     rows: Vec<Vec<String>>,
     min_rows: usize,
+    sizing_hook: SizingHook<TableMetrics>,
+}
+
+impl Sizeable<TableMetrics> for Table {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<TableMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Table {
@@ -106,7 +130,7 @@ impl Table {
     }
 
     /// Compute each column's resolved pixel width for the given total width.
-    fn widths(&self, ui: &Ui, total: f32) -> Vec<f32> {
+    fn widths(&self, ui: &Ui, total: f32, m: TableMetrics) -> Vec<f32> {
         let n = self.columns.len();
         let mut widths = vec![0.0_f32; n];
         let mut remainder_idx = Vec::new();
@@ -115,7 +139,7 @@ impl Table {
         for (i, col) in self.columns.iter().enumerate() {
             match col.sizing {
                 Sizing::Exact(w) => widths[i] = w,
-                Sizing::Auto => widths[i] = self.auto_width(ui, i),
+                Sizing::Auto => widths[i] = self.auto_width(ui, i, m),
                 Sizing::Remainder => remainder_idx.push(i),
             }
             if !matches!(col.sizing, Sizing::Remainder) {
@@ -124,7 +148,7 @@ impl Table {
         }
 
         #[allow(clippy::cast_precision_loss)]
-        let gaps = COL_GAP * n.saturating_sub(1) as f32;
+        let gaps = m.col_gap * n.saturating_sub(1) as f32;
         let leftover = (total - used - gaps).max(0.0);
         if remainder_idx.is_empty() {
             // No remainder columns: hand any leftover to the last column so the
@@ -144,7 +168,7 @@ impl Table {
 
     /// Measure the natural width of column `i`: the wider of its header and its
     /// widest cell, plus padding, clamped to a sane range.
-    fn auto_width(&self, ui: &Ui, i: usize) -> f32 {
+    fn auto_width(&self, ui: &Ui, i: usize, m: TableMetrics) -> f32 {
         let measure = |s: &str, size: f32| {
             ui.painter()
                 .layout_no_wrap(
@@ -155,20 +179,21 @@ impl Table {
                 .size()
                 .x
         };
-        let mut w = measure(&self.columns[i].header, TEXT_SIZE);
+        let mut w = measure(&self.columns[i].header, m.text_size);
         for row in &self.rows {
             if let Some(cell) = row.get(i) {
-                w = w.max(measure(cell, TEXT_SIZE));
+                w = w.max(measure(cell, m.text_size));
             }
         }
-        CELL_PAD_X.mul_add(2.0, w).clamp(48.0, 360.0)
+        m.cell_pad_x.mul_add(2.0, w).clamp(48.0, 360.0)
     }
 
     /// Core renderer shared by [`show`](Self::show) and the [`Widget`] impl.
-    fn render(self, ui: &mut Ui) -> (Response, Option<usize>) {
+    fn render(mut self, ui: &mut Ui) -> (Response, Option<usize>) {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let total = ui.available_width();
-        let widths = self.widths(ui, total);
+        let widths = self.widths(ui, total, m);
         let mut clicked = None;
 
         let resp = ui
@@ -176,7 +201,7 @@ impl Table {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
 
                 // Header row.
-                let (_, rects) = row_strip(ui, &widths, total);
+                let (_, rects) = row_strip(ui, &widths, total, m);
                 for (i, col) in self.columns.iter().enumerate() {
                     cell_text(
                         ui,
@@ -185,6 +210,7 @@ impl Table {
                         col.align,
                         tokens.muted_foreground,
                         true,
+                        m,
                     );
                 }
                 hairline(ui, total, tokens.border);
@@ -192,7 +218,7 @@ impl Table {
                 // Body rows.
                 let aligns: Vec<Align> = self.columns.iter().map(|c| c.align).collect();
                 for (r, row) in self.rows.iter().enumerate() {
-                    let (resp, rects) = row_strip(ui, &widths, total);
+                    let (resp, rects) = row_strip(ui, &widths, total, m);
                     // Hover highlight first, so cell text paints on top of it.
                     if resp.hovered() {
                         ui.painter()
@@ -200,7 +226,7 @@ impl Table {
                     }
                     for (i, align) in aligns.iter().enumerate() {
                         let text = row.get(i).map_or("", String::as_str);
-                        cell_text(ui, rects[i], text, *align, tokens.foreground, false);
+                        cell_text(ui, rects[i], text, *align, tokens.foreground, false, m);
                     }
                     if resp.clicked() {
                         clicked = Some(r);
@@ -211,7 +237,7 @@ impl Table {
                 // Pad short pages with empty rows so the table keeps a constant
                 // height (no layout jump when the last page is underfull).
                 for _ in self.rows.len()..self.min_rows {
-                    let _ = row_strip(ui, &widths, total);
+                    let _ = row_strip(ui, &widths, total, m);
                     hairline(ui, total, tokens.border.gamma_multiply(0.6));
                 }
             })
@@ -220,33 +246,47 @@ impl Table {
     }
 }
 
-/// Lay out one row: allocate a `ROW_H`-tall strip spanning `total`, split it
-/// into per-column rects (respecting `COL_GAP`), and return the row's
+/// Lay out one row: allocate a row-height-tall strip spanning `total`, split
+/// it into per-column rects (respecting the column gap), and return the row's
 /// click/hover [`Response`] alongside those rects.
-fn row_strip(ui: &mut Ui, widths: &[f32], total: f32) -> (Response, Vec<egui::Rect>) {
-    let (id, rect) = ui.allocate_space(Vec2::new(total, ROW_H));
+fn row_strip(
+    ui: &mut Ui,
+    widths: &[f32],
+    total: f32,
+    m: TableMetrics,
+) -> (Response, Vec<egui::Rect>) {
+    let (id, rect) = ui.allocate_space(Vec2::new(total, m.row_h));
     let mut rects = Vec::with_capacity(widths.len());
     let mut x = rect.left();
     for &w in widths {
-        let r = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(w, ROW_H));
+        let r = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(w, m.row_h));
         rects.push(r);
-        x += w + COL_GAP;
+        x += w + m.col_gap;
     }
     (ui.interact(rect, id, Sense::click()), rects)
 }
 
 /// Paint one cell's text into `rect`, padded and aligned. Headers are
 /// medium-weight; body cells are regular.
-fn cell_text(ui: &Ui, rect: egui::Rect, text: &str, align: Align, color: Color32, header: bool) {
+#[allow(clippy::too_many_arguments)]
+fn cell_text(
+    ui: &Ui,
+    rect: egui::Rect,
+    text: &str,
+    align: Align,
+    color: Color32,
+    header: bool,
+    m: TableMetrics,
+) {
     if text.is_empty() {
         return;
     }
     let rt = if header {
         RichText::new(text)
-            .font(crate::fonts::semibold(ui, TEXT_SIZE))
+            .font(crate::fonts::semibold(ui, m.text_size))
             .color(color)
     } else {
-        RichText::new(text).size(TEXT_SIZE).color(color)
+        RichText::new(text).size(m.text_size).color(color)
     };
     let galley = egui::WidgetText::from(rt).into_galley(
         ui,
@@ -254,7 +294,7 @@ fn cell_text(ui: &Ui, rect: egui::Rect, text: &str, align: Align, color: Color32
         rect.width(),
         egui::TextStyle::Body,
     );
-    let inner = rect.shrink2(Vec2::new(CELL_PAD_X, 0.0));
+    let inner = rect.shrink2(Vec2::new(m.cell_pad_x, 0.0));
     let x = match align {
         Align::Min => inner.left(),
         Align::Center => inner.center().x - galley.size().x / 2.0,
@@ -310,8 +350,9 @@ mod tests {
             let table = Table::new()
                 .column("A", Sizing::Exact(100.0), Align::LEFT)
                 .column("B", Sizing::Remainder, Align::LEFT);
-            let widths = table.widths(ui, 400.0);
-            let sum: f32 = widths.iter().sum::<f32>() + COL_GAP;
+            let m = TableMetrics::default();
+            let widths = table.widths(ui, 400.0, m);
+            let sum: f32 = widths.iter().sum::<f32>() + m.col_gap;
             assert!((sum - 400.0).abs() < 0.5, "sum {sum}");
         });
     }

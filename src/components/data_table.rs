@@ -29,19 +29,40 @@
 use egui::{Align, Color32, Id, Sense, Ui, Vec2, Widget as _};
 
 use crate::pagination::Pagination;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::table::Sizing;
 use crate::tokens::Tokens;
 
-/// Row height (matches [`Table`](crate::table::Table)'s `ROW_H`).
-const ROW_H: f32 = 40.0;
-/// Horizontal padding inside each cell.
-const CELL_PAD_X: f32 = 10.0;
-/// Cell / header text size (`text-sm`).
-const TEXT_SIZE: f32 = 13.0;
-/// Gap between columns.
-const COL_GAP: f32 = 8.0;
-/// Gap below the filter field.
-const FILTER_GAP: f32 = 10.0;
+/// Overridable geometry for [`DataTable`] — reach in via
+/// [`DataTable::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct DataTableMetrics {
+    /// Row height (matches [`Table`](crate::table::Table)'s row height).
+    pub row_h: f32,
+    /// Horizontal padding inside each cell.
+    pub cell_pad_x: f32,
+    /// Cell / header text size (`text-sm`).
+    pub text_size: f32,
+    /// Gap between columns.
+    pub col_gap: f32,
+    /// Gap below the filter field and above the pagination row.
+    pub filter_gap: f32,
+    /// Extra right padding reserved for the sort arrow on a sortable header.
+    pub sort_gap: f32,
+}
+
+impl Default for DataTableMetrics {
+    fn default() -> Self {
+        Self {
+            row_h: 40.0,
+            cell_pad_x: 10.0,
+            text_size: 13.0,
+            col_gap: 8.0,
+            filter_gap: 10.0,
+            sort_gap: 16.0,
+        }
+    }
+}
 
 /// A column definition for a [`DataTable`].
 pub struct DataColumn {
@@ -116,6 +137,13 @@ pub struct DataTable {
     page_size: usize,
     searchable: bool,
     search_placeholder: String,
+    sizing_hook: SizingHook<DataTableMetrics>,
+}
+
+impl Sizeable<DataTableMetrics> for DataTable {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<DataTableMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl DataTable {
@@ -129,6 +157,7 @@ impl DataTable {
             page_size: 10,
             searchable: true,
             search_placeholder: "Filter…".to_owned(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -168,8 +197,9 @@ impl DataTable {
 
     /// Render the table. Returns the original (pre-sort, pre-filter) index of
     /// the data row clicked this frame, or `None`.
-    pub fn show(self, ui: &mut Ui) -> Option<usize> {
+    pub fn show(mut self, ui: &mut Ui) -> Option<usize> {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let state_id = Id::new(("glazier-datatable", &self.id_salt));
         let mut state: DtState = ui.data_mut(|d| d.get_temp(state_id).unwrap_or_default());
 
@@ -186,7 +216,7 @@ impl DataTable {
                 if state.filter != prev {
                     state.page = 0; // reset to first page when the filter changes
                 }
-                ui.add_space(FILTER_GAP);
+                ui.add_space(m.filter_gap);
             }
 
             // Resolve the visible (filtered + sorted) row order.
@@ -207,13 +237,13 @@ impl DataTable {
 
             // Render header + body.
             let total = ui.available_width();
-            let widths = self.widths(ui, total);
-            self.header(ui, tokens, &widths, total, &mut state);
-            clicked = self.body(ui, tokens, &widths, total, &page_rows);
+            let widths = self.widths(ui, total, m);
+            self.header(ui, tokens, &widths, total, &mut state, m);
+            clicked = self.body(ui, tokens, &widths, total, &page_rows, m);
 
             // Pagination (only when more than one page).
             if total_pages > 1 {
-                ui.add_space(FILTER_GAP);
+                ui.add_space(m.filter_gap);
                 Pagination::new(total_pages).show(ui, &mut state.page);
             }
         });
@@ -258,7 +288,7 @@ impl DataTable {
     }
 
     /// Resolve each column's pixel width for `total` (mirrors `Table::widths`).
-    fn widths(&self, ui: &Ui, total: f32) -> Vec<f32> {
+    fn widths(&self, ui: &Ui, total: f32, m: DataTableMetrics) -> Vec<f32> {
         let n = self.columns.len();
         let mut widths = vec![0.0_f32; n];
         let mut remainder = Vec::new();
@@ -266,7 +296,7 @@ impl DataTable {
         for (i, col) in self.columns.iter().enumerate() {
             match col.sizing {
                 Sizing::Exact(w) => widths[i] = w,
-                Sizing::Auto => widths[i] = self.auto_width(ui, i),
+                Sizing::Auto => widths[i] = self.auto_width(ui, i, m),
                 Sizing::Remainder => remainder.push(i),
             }
             if !matches!(col.sizing, Sizing::Remainder) {
@@ -274,7 +304,7 @@ impl DataTable {
             }
         }
         #[allow(clippy::cast_precision_loss)]
-        let gaps = COL_GAP * n.saturating_sub(1) as f32;
+        let gaps = m.col_gap * n.saturating_sub(1) as f32;
         let leftover = (total - used - gaps).max(0.0);
         if remainder.is_empty() {
             if let Some(last) = widths.last_mut() {
@@ -292,12 +322,12 @@ impl DataTable {
 
     /// Natural width of column `i`: wider of header (plus sort-arrow room) and
     /// its widest cell, padded and clamped.
-    fn auto_width(&self, ui: &Ui, i: usize) -> f32 {
+    fn auto_width(&self, ui: &Ui, i: usize, m: DataTableMetrics) -> f32 {
         let measure = |s: &str| {
             ui.painter()
                 .layout_no_wrap(
                     s.to_owned(),
-                    egui::FontId::proportional(TEXT_SIZE),
+                    egui::FontId::proportional(m.text_size),
                     Color32::PLACEHOLDER,
                 )
                 .size()
@@ -310,17 +340,27 @@ impl DataTable {
                 w = w.max(measure(cell));
             }
         }
-        CELL_PAD_X.mul_add(2.0, w).clamp(48.0, 360.0)
+        m.cell_pad_x.mul_add(2.0, w).clamp(48.0, 360.0)
     }
 
     /// Render the clickable header row, toggling sort state on click.
-    fn header(&self, ui: &mut Ui, tokens: Tokens, widths: &[f32], total: f32, state: &mut DtState) {
-        let (id, rect) = ui.allocate_space(Vec2::new(total, ROW_H));
+    fn header(
+        &self,
+        ui: &mut Ui,
+        tokens: Tokens,
+        widths: &[f32],
+        total: f32,
+        state: &mut DtState,
+        m: DataTableMetrics,
+    ) {
+        let (id, rect) = ui.allocate_space(Vec2::new(total, m.row_h));
         let mut x = rect.left();
         for (i, col) in self.columns.iter().enumerate() {
-            let cell =
-                egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(widths[i], ROW_H));
-            x += widths[i] + COL_GAP;
+            let cell = egui::Rect::from_min_size(
+                egui::pos2(x, rect.top()),
+                Vec2::new(widths[i], m.row_h),
+            );
+            x += widths[i] + m.col_gap;
 
             let active = state.sort_col == Some(i);
             let color = if active {
@@ -328,12 +368,12 @@ impl DataTable {
             } else {
                 tokens.muted_foreground
             };
-            let inner = cell.shrink2(Vec2::new(CELL_PAD_X, 0.0));
+            let inner = cell.shrink2(Vec2::new(m.cell_pad_x, 0.0));
 
             // Header label.
             let galley = egui::WidgetText::from(
                 egui::RichText::new(&col.header)
-                    .font(crate::fonts::semibold(ui, TEXT_SIZE))
+                    .font(crate::fonts::semibold(ui, m.text_size))
                     .color(color),
             )
             .into_galley(
@@ -342,10 +382,11 @@ impl DataTable {
                 inner.width(),
                 egui::TextStyle::Body,
             );
+            let sort_gap = if col.sortable { m.sort_gap } else { 0.0 };
             let lx = match col.align {
                 Align::Min => inner.left(),
                 Align::Center => inner.center().x - galley.size().x / 2.0,
-                Align::Max => inner.right() - galley.size().x - sort_gap(col.sortable),
+                Align::Max => inner.right() - galley.size().x - sort_gap,
             };
             let ly = cell.center().y - galley.size().y / 2.0;
             let gw = galley.size().x;
@@ -389,11 +430,12 @@ impl DataTable {
         widths: &[f32],
         total: f32,
         page_rows: &[usize],
+        m: DataTableMetrics,
     ) -> Option<usize> {
         let mut clicked = None;
         let aligns: Vec<Align> = self.columns.iter().map(|c| c.align).collect();
         for &orig in page_rows {
-            let (id, rect) = ui.allocate_space(Vec2::new(total, ROW_H));
+            let (id, rect) = ui.allocate_space(Vec2::new(total, m.row_h));
             let resp = ui.interact(rect, id.with(("dt-r", orig)), Sense::click());
             if resp.hovered() {
                 ui.painter()
@@ -403,11 +445,11 @@ impl DataTable {
             for (i, align) in aligns.iter().enumerate() {
                 let cell = egui::Rect::from_min_size(
                     egui::pos2(x, rect.top()),
-                    Vec2::new(widths[i], ROW_H),
+                    Vec2::new(widths[i], m.row_h),
                 );
-                x += widths[i] + COL_GAP;
+                x += widths[i] + m.col_gap;
                 let text = self.rows[orig].get(i).map_or("", String::as_str);
-                cell_text(ui, cell, text, *align, tokens.foreground);
+                cell_text(ui, cell, text, *align, tokens.foreground, m);
             }
             if resp.clicked() {
                 clicked = Some(orig);
@@ -416,19 +458,10 @@ impl DataTable {
         }
         // Pad short pages so the table keeps a constant height.
         for _ in page_rows.len()..self.page_size {
-            ui.allocate_space(Vec2::new(total, ROW_H));
+            ui.allocate_space(Vec2::new(total, m.row_h));
             hairline(ui, total, tokens.border.gamma_multiply(0.6));
         }
         clicked
-    }
-}
-
-/// Extra right padding reserved for the sort arrow on right-aligned columns.
-const fn sort_gap(sortable: bool) -> f32 {
-    if sortable {
-        16.0
-    } else {
-        0.0
     }
 }
 
@@ -494,18 +527,25 @@ fn sort_arrow(ui: &Ui, c: egui::Pos2, active: bool, desc: bool, color: Color32) 
 }
 
 /// Paint one body cell's text, padded and aligned.
-fn cell_text(ui: &Ui, rect: egui::Rect, text: &str, align: Align, color: Color32) {
+fn cell_text(
+    ui: &Ui,
+    rect: egui::Rect,
+    text: &str,
+    align: Align,
+    color: Color32,
+    m: DataTableMetrics,
+) {
     if text.is_empty() {
         return;
     }
-    let galley = egui::WidgetText::from(egui::RichText::new(text).size(TEXT_SIZE).color(color))
+    let galley = egui::WidgetText::from(egui::RichText::new(text).size(m.text_size).color(color))
         .into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
             rect.width(),
             egui::TextStyle::Body,
         );
-    let inner = rect.shrink2(Vec2::new(CELL_PAD_X, 0.0));
+    let inner = rect.shrink2(Vec2::new(m.cell_pad_x, 0.0));
     let x = match align {
         Align::Min => inner.left(),
         Align::Center => inner.center().x - galley.size().x / 2.0,

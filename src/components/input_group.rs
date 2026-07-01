@@ -10,10 +10,23 @@ use egui::{Color32, Frame, Margin, Response, RichText, Stroke, TextEdit, Ui, Vec
 
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Inner content height: `h-8` (32px) minus the frame's 4px vertical padding.
-const ROW_HEIGHT: f32 = 24.0;
+/// Overridable geometry for [`InputGroup`] — reach in via
+/// [`InputGroup::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct InputGroupMetrics {
+    /// Inner content height: `h-8` (32px) minus the frame's 4px vertical
+    /// padding.
+    pub row_height: f32,
+}
+
+impl Default for InputGroupMetrics {
+    fn default() -> Self {
+        Self { row_height: 24.0 }
+    }
+}
 
 /// A text input with optional leading/trailing addon slots.
 ///
@@ -35,11 +48,18 @@ pub struct InputGroup<'a> {
     icon_end: Option<Icon>,
     width: Option<f32>,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<InputGroupMetrics>,
 }
 
 impl Customize<Frame> for InputGroup<'_> {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<InputGroupMetrics> for InputGroup<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<InputGroupMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -55,6 +75,7 @@ impl<'a> InputGroup<'a> {
             icon_end: None,
             width: None,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -104,6 +125,7 @@ impl Widget for InputGroup<'_> {
     fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
         let width = self.width.unwrap_or_else(|| ui.available_width());
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
 
         let mut frame = Frame::new()
             .fill(filled_input(tokens))
@@ -119,7 +141,7 @@ impl Widget for InputGroup<'_> {
                 // stretch the field vertically and overflow the card).
                 let inner_w = width - 20.0; // frame inner_margin: 10 each side
                 ui.allocate_ui_with_layout(
-                    Vec2::new(inner_w, ROW_HEIGHT),
+                    Vec2::new(inner_w, m.row_height),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;

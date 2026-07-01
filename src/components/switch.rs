@@ -5,12 +5,29 @@
 
 use egui::{Response, Sense, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// shadcn switch dimensions: track 36×20, thumb 16, 2px inset.
-const TRACK: Vec2 = Vec2::new(36.0, 20.0);
-const THUMB: f32 = 16.0;
-const INSET: f32 = 2.0;
+/// Overridable geometry for [`Switch`] — reach in via [`Switch::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct SwitchMetrics {
+    /// Track size (shadcn switch is 36×20).
+    pub track: Vec2,
+    /// Thumb diameter.
+    pub thumb: f32,
+    /// Inset between the track edge and the thumb at rest.
+    pub inset: f32,
+}
+
+impl Default for SwitchMetrics {
+    fn default() -> Self {
+        Self {
+            track: Vec2::new(36.0, 20.0),
+            thumb: 16.0,
+            inset: 2.0,
+        }
+    }
+}
 
 /// A boolean toggle switch.
 ///
@@ -25,19 +42,30 @@ const INSET: f32 = 2.0;
 #[must_use = "switches do nothing unless you add them to a Ui"]
 pub struct Switch<'a> {
     on: &'a mut bool,
+    sizing_hook: SizingHook<SwitchMetrics>,
 }
 
 impl<'a> Switch<'a> {
     /// Create a switch bound to `on`.
     pub const fn new(on: &'a mut bool) -> Self {
-        Self { on }
+        Self {
+            on,
+            sizing_hook: SizingHook::new(),
+        }
+    }
+}
+
+impl Sizeable<SwitchMetrics> for Switch<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<SwitchMetrics> {
+        &mut self.sizing_hook
     }
 }
 
 impl Widget for Switch<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
-        let (rect, mut response) = ui.allocate_at_least(TRACK, Sense::click());
+        let m = crate::sizing::resolve(self.sizing_hook);
+        let (rect, mut response) = ui.allocate_at_least(m.track, Sense::click());
 
         if response.clicked() {
             *self.on = !*self.on;
@@ -53,10 +81,10 @@ impl Widget for Switch<'_> {
             let painter = ui.painter();
             painter.rect_filled(rect, radius, track_color);
 
-            let travel = INSET.mul_add(-2.0, rect.width() - THUMB);
-            let cx = rect.left() + INSET + THUMB / 2.0 + travel * t;
+            let travel = m.inset.mul_add(-2.0, rect.width() - m.thumb);
+            let cx = rect.left() + m.inset + m.thumb / 2.0 + travel * t;
             let cy = rect.center().y;
-            painter.circle_filled(egui::pos2(cx, cy), THUMB / 2.0, tokens.background);
+            painter.circle_filled(egui::pos2(cx, cy), m.thumb / 2.0, tokens.background);
         }
 
         response

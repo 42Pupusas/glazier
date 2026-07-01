@@ -14,21 +14,49 @@
 
 use egui::{Response, Sense, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Gap between crumbs and separators (shadcn `gap-1.5`).
-const GAP: f32 = 6.0;
-/// Separator chevron edge (shadcn `size-3.5`).
-const SEP: f32 = 14.0;
-/// Ellipsis button edge (shadcn `size-7`) and its dot icon box (`size-4`).
-const ELLIPSIS_BTN: f32 = 28.0;
-const ELLIPSIS_ICON: f32 = 16.0;
-/// Shared row height for every crumb. Allocating each crumb at one uniform
-/// height keeps them all on the same centerline — egui's horizontal layout does
-/// not re-center earlier (shorter) items when a later, taller one grows the row.
-const ROW_H: f32 = ELLIPSIS_BTN;
-/// Crumb text size (shadcn `text-sm`, tuned to the card body scale).
-const TEXT_SIZE: f32 = 13.0;
+/// Overridable geometry/timing for [`Breadcrumb`] — reach in via
+/// [`Breadcrumb::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct BreadcrumbMetrics {
+    /// Gap between crumbs and separators (shadcn `gap-1.5`).
+    pub gap: f32,
+    /// Separator chevron edge (shadcn `size-3.5`).
+    pub sep: f32,
+    /// Ellipsis button edge (shadcn `size-7`).
+    pub ellipsis_btn: f32,
+    /// Ellipsis dot icon box (shadcn `size-4`).
+    pub ellipsis_icon: f32,
+    /// Crumb text size (shadcn `text-sm`, tuned to the card body scale).
+    pub text_size: f32,
+    /// Seconds for the link/ellipsis hover transition.
+    pub hover_time: f32,
+}
+
+impl Default for BreadcrumbMetrics {
+    fn default() -> Self {
+        Self {
+            gap: 6.0,
+            sep: 14.0,
+            ellipsis_btn: 28.0,
+            ellipsis_icon: 16.0,
+            text_size: 13.0,
+            hover_time: 0.15,
+        }
+    }
+}
+
+impl BreadcrumbMetrics {
+    /// Shared row height for every crumb — the ellipsis button's edge.
+    /// Allocating each crumb at one uniform height keeps them all on the same
+    /// centerline — egui's horizontal layout does not re-center earlier
+    /// (shorter) items when a later, taller one grows the row.
+    const fn row_h(self) -> f32 {
+        self.ellipsis_btn
+    }
+}
 
 /// One crumb in the trail.
 enum Crumb {
@@ -63,6 +91,13 @@ pub struct Breadcrumb {
     /// Optional extra seed mixed into every crumb's egui id, so two
     /// breadcrumb instances that share label+index pairs don't clash.
     id_salt: Option<egui::Id>,
+    sizing_hook: SizingHook<BreadcrumbMetrics>,
+}
+
+impl Sizeable<BreadcrumbMetrics> for Breadcrumb {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<BreadcrumbMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Breadcrumb {
@@ -107,8 +142,9 @@ impl Breadcrumb {
 
     /// Render the trail, returning both the row [`Response`] and the click
     /// index. Backs both [`show`](Self::show) and the [`Widget`] impl.
-    fn render(self, ui: &mut Ui) -> (Response, Option<usize>) {
+    fn render(mut self, ui: &mut Ui) -> (Response, Option<usize>) {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let salt = self.id_salt;
         let mut clicked = None;
 
@@ -118,47 +154,56 @@ impl Breadcrumb {
         // and place the widget next to the left-hand group instead of packing
         // it against the right-hand neighbours.  `allocate_ui_with_layout`
         // with an explicit size avoids that.
-        let font = egui::FontId::proportional(TEXT_SIZE);
+        let font = egui::FontId::proportional(m.text_size);
         let n = self.crumbs.len();
-        let crumb_w: f32 = self.crumbs.iter().map(|c| match c {
-            Crumb::Link(s) | Crumb::Page(s) =>
-                ui.painter().layout_no_wrap(s.clone(), font.clone(), egui::Color32::PLACEHOLDER).size().x,
-            Crumb::Ellipsis => ELLIPSIS_BTN,
-        }).sum();
-        // Each separator is its own allocated widget; with item_spacing.x=GAP
-        // egui inserts GAP between every adjacent pair of widgets.
+        let crumb_w: f32 = self
+            .crumbs
+            .iter()
+            .map(|c| match c {
+                Crumb::Link(s) | Crumb::Page(s) => ui
+                    .painter()
+                    .layout_no_wrap(s.clone(), font.clone(), egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x,
+                Crumb::Ellipsis => m.ellipsis_btn,
+            })
+            .sum();
+        // Each separator is its own allocated widget; with item_spacing.x=gap
+        // egui inserts `gap` between every adjacent pair of widgets.
         // Total widgets = n crumbs + (n-1) separators → (2n-2) gaps.
         #[allow(clippy::cast_precision_loss)] // n is a crumb count, always tiny
         let n_f = n.saturating_sub(1) as f32;
-        let natural_w = (2.0 * n_f).mul_add(GAP, n_f.mul_add(SEP, crumb_w));
+        let natural_w = (2.0 * n_f).mul_add(m.gap, n_f.mul_add(m.sep, crumb_w));
 
-        let resp = ui.allocate_ui_with_layout(
-            egui::vec2(natural_w, ROW_H),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(GAP, 0.0);
-                let n = self.crumbs.len();
-                for (i, crumb) in self.crumbs.into_iter().enumerate() {
-                    match crumb {
-                        Crumb::Link(label) => {
-                            if crumb_text(ui, tokens, &label, i, true, salt).clicked() {
-                                clicked = Some(i);
+        let resp = ui
+            .allocate_ui_with_layout(
+                egui::vec2(natural_w, m.row_h()),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(m.gap, 0.0);
+                    let n = self.crumbs.len();
+                    for (i, crumb) in self.crumbs.into_iter().enumerate() {
+                        match crumb {
+                            Crumb::Link(label) => {
+                                if crumb_text(ui, tokens, &label, i, true, salt, m).clicked() {
+                                    clicked = Some(i);
+                                }
+                            }
+                            Crumb::Page(label) => {
+                                crumb_text(ui, tokens, &label, i, false, salt, m);
+                            }
+                            Crumb::Ellipsis => {
+                                if ellipsis_button(ui, tokens, i, salt, m).clicked() {
+                                    clicked = Some(i);
+                                }
                             }
                         }
-                        Crumb::Page(label) => {
-                            crumb_text(ui, tokens, &label, i, false, salt);
-                        }
-                        Crumb::Ellipsis => {
-                            if ellipsis_button(ui, tokens, i, salt).clicked() {
-                                clicked = Some(i);
-                            }
+                        if i + 1 < n {
+                            separator(ui, tokens, m);
                         }
                     }
-                    if i + 1 < n {
-                        separator(ui, tokens);
-                    }
-                }
-            })
+                },
+            )
             .response;
         (resp, clicked)
     }
@@ -171,14 +216,22 @@ impl Breadcrumb {
 /// The interaction id is derived from the label + index so it stays stable
 /// across frames regardless of layout position — avoiding the auto-id drift
 /// that can drop clicks inside reflowing containers.
-fn crumb_text(ui: &mut Ui, tokens: Tokens, label: &str, idx: usize, interactive: bool, salt: Option<egui::Id>) -> Response {
-    let font = egui::FontId::proportional(TEXT_SIZE);
+fn crumb_text(
+    ui: &mut Ui,
+    tokens: Tokens,
+    label: &str,
+    idx: usize,
+    interactive: bool,
+    salt: Option<egui::Id>,
+    m: BreadcrumbMetrics,
+) -> Response {
+    let font = egui::FontId::proportional(m.text_size);
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER);
     // Allocate at the shared row height so this crumb shares the trail's
     // centerline; the click target spans the full row height too.
-    let (_, rect) = ui.allocate_space(Vec2::new(galley.size().x, ROW_H));
+    let (_, rect) = ui.allocate_space(Vec2::new(galley.size().x, m.row_h()));
 
     let (resp, color) = if interactive {
         let id = egui::Id::new(("glazier-breadcrumb", label, idx)).with(salt);
@@ -187,7 +240,7 @@ fn crumb_text(ui: &mut Ui, tokens: Tokens, label: &str, idx: usize, interactive:
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         let t = ui
             .ctx()
-            .animate_bool_with_time(id.with("hover"), resp.hovered(), 0.15);
+            .animate_bool_with_time(id.with("hover"), resp.hovered(), m.hover_time);
         (
             resp,
             tokens.muted_foreground.lerp_to_gamma(tokens.foreground, t),
@@ -209,11 +262,11 @@ fn crumb_text(ui: &mut Ui, tokens: Tokens, label: &str, idx: usize, interactive:
 }
 
 /// Render a `chevron-right` separator in faint `muted_foreground`.
-fn separator(ui: &mut Ui, tokens: Tokens) {
-    let (_, rect) = ui.allocate_space(Vec2::new(SEP, ROW_H));
+fn separator(ui: &mut Ui, tokens: Tokens, m: BreadcrumbMetrics) {
+    let (_, rect) = ui.allocate_space(Vec2::new(m.sep, m.row_h()));
     let c = rect.center();
-    let h = SEP * 0.22;
-    let w = SEP * 0.16;
+    let h = m.sep * 0.22;
+    let w = m.sep * 0.16;
     let color = tokens.muted_foreground.gamma_multiply(0.7);
     let stroke = egui::Stroke::new(1.5, color);
     let top = egui::pos2(c.x - w, c.y - h);
@@ -225,8 +278,14 @@ fn separator(ui: &mut Ui, tokens: Tokens) {
 
 /// Render the ellipsis crumb: a `size-7` rounded button with three horizontal
 /// dots, gaining a `muted` fill on hover.
-fn ellipsis_button(ui: &mut Ui, tokens: Tokens, idx: usize, salt: Option<egui::Id>) -> Response {
-    let (_, rect) = ui.allocate_space(Vec2::splat(ELLIPSIS_BTN));
+fn ellipsis_button(
+    ui: &mut Ui,
+    tokens: Tokens,
+    idx: usize,
+    salt: Option<egui::Id>,
+    m: BreadcrumbMetrics,
+) -> Response {
+    let (_, rect) = ui.allocate_space(Vec2::splat(m.ellipsis_btn));
     let id = egui::Id::new(("glazier-breadcrumb-ellipsis", idx)).with(salt);
     let resp = ui
         .interact(rect, id, Sense::click())
@@ -234,7 +293,7 @@ fn ellipsis_button(ui: &mut Ui, tokens: Tokens, idx: usize, salt: Option<egui::I
 
     let t = ui
         .ctx()
-        .animate_bool_with_time(id.with("hover"), resp.hovered(), 0.15);
+        .animate_bool_with_time(id.with("hover"), resp.hovered(), m.hover_time);
     if t > 0.01 {
         ui.painter()
             .rect_filled(rect, tokens.radius_2xl(), tokens.muted.gamma_multiply(t));
@@ -243,8 +302,8 @@ fn ellipsis_button(ui: &mut Ui, tokens: Tokens, idx: usize, salt: Option<egui::I
     // Three horizontal dots centred in a size-4 box.
     let c = rect.center();
     let color = tokens.muted_foreground.lerp_to_gamma(tokens.foreground, t);
-    let step = ELLIPSIS_ICON * 0.32;
-    let r = ELLIPSIS_ICON * 0.09;
+    let step = m.ellipsis_icon * 0.32;
+    let r = m.ellipsis_icon * 0.09;
     for k in [-1.0_f32, 0.0, 1.0] {
         let cx = k.mul_add(step, c.x);
         ui.painter().circle_filled(egui::pos2(cx, c.y), r, color);

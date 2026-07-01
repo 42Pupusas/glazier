@@ -10,6 +10,7 @@ use egui::{Frame, Response, RichText, Stroke, Ui, Widget};
 
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// Visual style of an [`Alert`], mirroring shadcn's `variant` prop.
@@ -20,6 +21,27 @@ pub enum Variant {
     Default,
     /// Error emphasis: `destructive` icon, title, and border.
     Destructive,
+}
+
+/// Overridable geometry for [`Alert`] — reach in via [`Alert::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct AlertMetrics {
+    /// Gap between the icon and the text column (shadcn `gap-3`).
+    pub icon_gap: f32,
+    /// Leading icon edge length.
+    pub icon_size: f32,
+    /// Description font size.
+    pub description_size: f32,
+}
+
+impl Default for AlertMetrics {
+    fn default() -> Self {
+        Self {
+            icon_gap: 12.0,
+            icon_size: 16.0,
+            description_size: 13.0,
+        }
+    }
 }
 
 /// A static inline callout.
@@ -48,11 +70,18 @@ pub struct Alert {
     icon: Option<Icon>,
     variant: Variant,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<AlertMetrics>,
 }
 
 impl Customize<Frame> for Alert {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<AlertMetrics> for Alert {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<AlertMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -65,6 +94,7 @@ impl Alert {
             icon: None,
             variant: Variant::default(),
             style_hook: StyleHook::default(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -87,12 +117,10 @@ impl Alert {
     }
 }
 
-/// Gap between the icon and the text column (shadcn `gap-3`).
-const ICON_GAP: f32 = 12.0;
-
 impl Widget for Alert {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(self.sizing_hook);
 
         // The destructive variant tints the icon/title/border; the default uses
         // the neutral foreground over the card surface.
@@ -115,8 +143,8 @@ impl Widget for Alert {
                     if let Some(icon) = self.icon {
                         // Nudge the icon down to align with the title's cap line.
                         ui.add_space(0.0);
-                        icon.color(accent).size(16.0).ui(ui);
-                        ui.add_space(ICON_GAP - ui.spacing().item_spacing.x);
+                        icon.color(accent).size(m.icon_size).ui(ui);
+                        ui.add_space(m.icon_gap - ui.spacing().item_spacing.x);
                     }
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 4.0;
@@ -129,7 +157,7 @@ impl Widget for Alert {
                             ui.label(
                                 RichText::new(description)
                                     .color(tokens.muted_foreground)
-                                    .size(13.0),
+                                    .size(m.description_size),
                             );
                         }
                     });

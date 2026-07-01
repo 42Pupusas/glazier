@@ -36,10 +36,8 @@
 use egui::{Color32, Image, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::components::icon::Icon;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
-
-/// Inner padding / gap between media, text, and actions.
-const GAP: f32 = 10.0;
 
 // --- Bundled lucide glyphs -------------------------------------------------
 
@@ -145,6 +143,21 @@ pub enum Orientation {
     Vertical,
 }
 
+/// Overridable geometry for [`Attachment`] — reach in via
+/// [`Attachment::sizing`]. Field names match the internal per-size record
+/// this used to be, now merged with a user override, resolved per-size below.
+#[derive(Clone, Copy, Debug)]
+pub struct AttachmentMetrics {
+    /// Gap between media, text, and actions.
+    pub gap: f32,
+}
+
+impl Default for AttachmentMetrics {
+    fn default() -> Self {
+        Self { gap: 10.0 }
+    }
+}
+
 /// Resolved per-size geometry.
 #[derive(Clone, Copy)]
 struct Metrics {
@@ -217,6 +230,7 @@ pub struct Attachment {
     orientation: Orientation,
     removable: bool,
     width: Option<f32>,
+    sizing_hook: SizingHook<AttachmentMetrics>,
 }
 
 impl Attachment {
@@ -233,6 +247,7 @@ impl Attachment {
             orientation: Orientation::Horizontal,
             removable: false,
             width: None,
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -290,6 +305,15 @@ impl Attachment {
         self.width = Some(width);
         self
     }
+}
+
+impl Sizeable<AttachmentMetrics> for Attachment {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<AttachmentMetrics> {
+        &mut self.sizing_hook
+    }
+}
+
+impl Attachment {
 
     /// The description to render: the explicit override, else `TYPE · SIZE`.
     fn resolved_description(&self) -> Option<String> {
@@ -307,17 +331,18 @@ impl Attachment {
     }
 
     /// Render the chip, returning its [`AttachmentResponse`].
-    pub fn show(self, ui: &mut Ui) -> AttachmentResponse {
+    pub fn show(mut self, ui: &mut Ui) -> AttachmentResponse {
         let tokens = Tokens::get(ui);
         let m = Metrics::of(self.size);
-        let vertical = self.orientation == Orientation::Vertical;
         let desc = self.resolved_description();
+        let gap = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook)).gap;
+        let vertical = self.orientation == Orientation::Vertical;
 
         let width = self.width.unwrap_or(if vertical { 132.0 } else { 240.0 });
         let height = if vertical {
             // padded tile + gap + name + desc.
             let lines = m.name + if desc.is_some() { 2.0 + m.desc } else { 0.0 };
-            2.0f32.mul_add(m.pad, m.tile + GAP + lines)
+            2.0f32.mul_add(m.pad, m.tile + gap + lines)
         } else {
             2.0f32.mul_add(m.pad, m.tile)
         };
@@ -382,15 +407,15 @@ impl Attachment {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if !vertical {
-                    content_right -= m.close + GAP;
+                    content_right -= m.close + gap;
                 }
             }
 
             // --- Content (name + description) -------------------------------
             let (text_left, name_center_y) = if vertical {
-                (rect.left() + m.pad, tile.bottom() + GAP + m.name / 2.0)
+                (rect.left() + m.pad, tile.bottom() + gap + m.name / 2.0)
             } else {
-                (tile.right() + GAP, rect.center().y)
+                (tile.right() + gap, rect.center().y)
             };
             let avail = (content_right - text_left).max(0.0);
             self.paint_content(
