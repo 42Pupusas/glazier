@@ -15,12 +15,47 @@
 use egui::{Frame, Margin, Response, Stroke, StrokeKind, TextEdit, Ui, Vec2, Widget};
 
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Full height (`h-9`) — matches shadcn default.
-const H_FULL: f32 = 36.0;
-/// Compact height (`h-7`) — for sidebar / dense-list contexts.
-const H_COMPACT: f32 = 28.0;
+/// Overridable geometry for [`Input`] — reach in via [`Input::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct InputMetrics {
+    /// Full height (`h-9`) — matches shadcn default.
+    pub h_full: f32,
+    /// Compact height (`h-7`) — for sidebar / dense-list contexts.
+    pub h_compact: f32,
+    /// Vertical padding in full mode.
+    pub v_pad_full: i8,
+    /// Vertical padding in compact mode.
+    pub v_pad_compact: i8,
+    /// Left inner margin with no leading icon.
+    pub left_margin_plain: i8,
+    /// Left inner margin with a leading icon.
+    pub left_margin_icon: i8,
+    /// Right inner margin.
+    pub right_margin: i8,
+    /// Leading icon edge length.
+    pub icon_size: f32,
+    /// Gap from the field's left edge to the icon.
+    pub icon_inset: f32,
+}
+
+impl Default for InputMetrics {
+    fn default() -> Self {
+        Self {
+            h_full: 36.0,
+            h_compact: 28.0,
+            v_pad_full: 8,
+            v_pad_compact: 4,
+            left_margin_plain: 12,
+            left_margin_icon: 36,
+            right_margin: 12,
+            icon_size: 16.0,
+            icon_inset: 10.0,
+        }
+    }
+}
 
 /// A single-line text input.
 ///
@@ -47,11 +82,18 @@ pub struct Input<'a> {
     /// surrounding 32 px rows.
     compact: bool,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<InputMetrics>,
 }
 
 impl Customize<Frame> for Input<'_> {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<InputMetrics> for Input<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<InputMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -68,6 +110,7 @@ impl<'a> Input<'a> {
             width: None,
             compact: false,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -129,10 +172,15 @@ impl Widget for Input<'_> {
     fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
         let width = self.width.unwrap_or_else(|| ui.available_width());
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
 
-        let h = if self.compact { H_COMPACT } else { H_FULL };
-        // Tighter vertical padding in compact mode (4 px top/bottom vs 8 px).
-        let v_pad: i8 = if self.compact { 4 } else { 8 };
+        let h = if self.compact { m.h_compact } else { m.h_full };
+        // Tighter vertical padding in compact mode.
+        let v_pad: i8 = if self.compact {
+            m.v_pad_compact
+        } else {
+            m.v_pad_full
+        };
 
         let fill = if self.disabled {
             tokens.muted
@@ -145,16 +193,19 @@ impl Widget for Input<'_> {
             tokens.foreground
         };
 
-        // When an icon is present shift the left margin right to make room
-        // (10 px gap + 16 px icon + 10 px gap to text = 36 px total).
-        let left_margin: i8 = if self.icon_start.is_some() { 36 } else { 12 };
+        // When an icon is present shift the left margin right to make room.
+        let left_margin: i8 = if self.icon_start.is_some() {
+            m.left_margin_icon
+        } else {
+            m.left_margin_plain
+        };
 
         let mut frame = Frame::new()
             .fill(fill)
             .corner_radius(tokens.radius_md())
             .inner_margin(Margin {
                 left: left_margin,
-                right: 12,
+                right: m.right_margin,
                 top: v_pad,
                 bottom: v_pad,
             });
@@ -176,15 +227,14 @@ impl Widget for Input<'_> {
 
         // Paint the leading icon inside the left margin, vertically centred.
         if let Some(icon) = self.icon_start {
-            let icon_size = 16.0;
             let icon_rect = egui::Rect::from_center_size(
                 egui::pos2(
-                    response.rect.left() + 10.0 + icon_size / 2.0,
+                    response.rect.left() + m.icon_inset + m.icon_size / 2.0,
                     response.rect.center().y,
                 ),
-                egui::Vec2::splat(icon_size),
+                egui::Vec2::splat(m.icon_size),
             );
-            icon.size(icon_size)
+            icon.size(m.icon_size)
                 .color(tokens.muted_foreground)
                 .image(tokens)
                 .paint_at(ui, icon_rect);

@@ -27,6 +27,7 @@
 
 use egui::{Response, Sense, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// A civil date in the proleptic Gregorian calendar.
@@ -106,13 +107,27 @@ const FALLBACK_TODAY: Date = Date {
     day: 1,
 };
 
-/// Minimum cell edge / row height (shadcn `size-9`). Columns grow past this to
-/// fill the available width; the height stays fixed.
-const CELL: f32 = 36.0;
-/// Gap between grid cells.
-const GRID_GAP: f32 = 2.0;
-/// Day text size.
-const TEXT_SIZE: f32 = 13.0;
+/// Overridable geometry for [`Calendar`] — reach in via [`Calendar::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct CalendarMetrics {
+    /// Minimum cell edge / row height (shadcn `size-9`). Columns grow past
+    /// this to fill the available width; the height stays fixed.
+    pub cell: f32,
+    /// Gap between grid cells.
+    pub grid_gap: f32,
+    /// Day text size.
+    pub text_size: f32,
+}
+
+impl Default for CalendarMetrics {
+    fn default() -> Self {
+        Self {
+            cell: 36.0,
+            grid_gap: 2.0,
+            text_size: 13.0,
+        }
+    }
+}
 
 /// A single-month calendar bound to an `Option<Date>` selection.
 #[must_use = "calendars do nothing unless shown"]
@@ -120,6 +135,13 @@ pub struct Calendar<'a> {
     selected: &'a mut Option<Date>,
     today: Date,
     id_salt: egui::Id,
+    sizing_hook: SizingHook<CalendarMetrics>,
+}
+
+impl Sizeable<CalendarMetrics> for Calendar<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<CalendarMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> Calendar<'a> {
@@ -129,6 +151,7 @@ impl<'a> Calendar<'a> {
             selected,
             today: FALLBACK_TODAY,
             id_salt: egui::Id::new("glazier-calendar"),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -147,8 +170,9 @@ impl<'a> Calendar<'a> {
     }
 
     /// Render the calendar. Returns `true` if the selection changed this frame.
-    pub fn show(self, ui: &mut Ui) -> bool {
+    pub fn show(mut self, ui: &mut Ui) -> bool {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
 
         // The visible month persists across frames, seeded from the selection or
         // today, stored as a (year, month) pair.
@@ -159,28 +183,28 @@ impl<'a> Calendar<'a> {
             .data_mut(|d| *d.get_temp_mut_or(id, (seed.year, seed.month)));
 
         // Stretch the 7 columns to fill the available width: cells grow from the
-        // `CELL` baseline so the grid fills its card instead of hugging the left
+        // cell baseline so the grid fills its card instead of hugging the left
         // edge. Width is shared by the header, weekday row, and day grid so the
         // columns line up.
-        let cw = (GRID_GAP.mul_add(-6.0, ui.available_width()) / 7.0).max(CELL);
+        let cw = (m.grid_gap.mul_add(-6.0, ui.available_width()) / 7.0).max(m.cell);
 
         let mut changed = false;
         ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(GRID_GAP, GRID_GAP);
+            ui.spacing_mut().item_spacing = Vec2::new(m.grid_gap, m.grid_gap);
 
             // Header: ‹  Month YYYY  ›
             ui.horizontal(|ui| {
                 let view = Date::new(vy, vm, 1);
-                if nav(ui, id, tokens, true).clicked() {
+                if nav(ui, id, tokens, true, m).clicked() {
                     let p = view.add_months(-1);
                     vy = p.year;
                     vm = p.month;
                 }
                 let label = format!("{} {}", MONTHS[vm as usize - 1], vy);
                 // The label spans the five middle columns between the two arrows.
-                let avail = cw.mul_add(5.0, GRID_GAP * 4.0);
+                let avail = cw.mul_add(5.0, m.grid_gap * 4.0);
                 ui.allocate_ui_with_layout(
-                    Vec2::new(avail, CELL),
+                    Vec2::new(avail, m.cell),
                     egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                     |ui| {
                         ui.label(
@@ -190,7 +214,7 @@ impl<'a> Calendar<'a> {
                         );
                     },
                 );
-                if nav(ui, id, tokens, false).clicked() {
+                if nav(ui, id, tokens, false, m).clicked() {
                     let n = view.add_months(1);
                     vy = n.year;
                     vm = n.month;
@@ -200,7 +224,7 @@ impl<'a> Calendar<'a> {
             // Weekday header row.
             ui.horizontal(|ui| {
                 for w in WEEKDAYS {
-                    let (_, rect) = ui.allocate_space(Vec2::new(cw, CELL));
+                    let (_, rect) = ui.allocate_space(Vec2::new(cw, m.cell));
                     let g = ui.painter().layout_no_wrap(
                         (*w).to_owned(),
                         egui::FontId::proportional(12.0),
@@ -230,7 +254,7 @@ impl<'a> Calendar<'a> {
                             selected: *self.selected,
                             width: cw,
                         };
-                        if day_cell(ui, tokens, day).clicked() {
+                        if day_cell(ui, tokens, day, m).clicked() {
                             *self.selected = Some(cell);
                             changed = true;
                             // Jump the view if they picked an adjacent-month day.
@@ -288,8 +312,9 @@ const fn from_rata_die(z: i64) -> Date {
 /// A prev/next month arrow button (`‹`/`›`). `base` is the calendar's stable
 /// id; the button derives a position-independent id from it so egui's id-clash
 /// detector stays quiet across relayout passes when the month changes.
-fn nav(ui: &mut Ui, base: egui::Id, tokens: Tokens, left: bool) -> Response {
-    let (_, rect) = ui.allocate_space(Vec2::splat(CELL));
+#[allow(clippy::many_single_char_names)]
+fn nav(ui: &mut Ui, base: egui::Id, tokens: Tokens, left: bool, m: CalendarMetrics) -> Response {
+    let (_, rect) = ui.allocate_space(Vec2::splat(m.cell));
     let id = base.with(("nav", left));
     let resp = ui
         .interact(rect, id, Sense::click())
@@ -340,7 +365,7 @@ struct DayCell {
 /// fixed rect's id changes between frames; since a slot's screen rect is stable
 /// while its date changes on month-switch, a date-keyed id would trip that
 /// warning. A position-keyed id keeps each rect's id constant across months.
-fn day_cell(ui: &mut Ui, tokens: Tokens, day: DayCell) -> Response {
+fn day_cell(ui: &mut Ui, tokens: Tokens, day: DayCell, m: CalendarMetrics) -> Response {
     let DayCell {
         base,
         slot,
@@ -350,7 +375,7 @@ fn day_cell(ui: &mut Ui, tokens: Tokens, day: DayCell) -> Response {
         selected,
         width,
     } = day;
-    let (_, rect) = ui.allocate_space(Vec2::new(width, CELL));
+    let (_, rect) = ui.allocate_space(Vec2::new(width, m.cell));
     let id = base.with(("day", slot));
     let resp = ui
         .interact(rect, id, Sense::click())
@@ -390,7 +415,7 @@ fn day_cell(ui: &mut Ui, tokens: Tokens, day: DayCell) -> Response {
     };
     let g = ui.painter().layout_no_wrap(
         format!("{}", cell.day),
-        egui::FontId::proportional(TEXT_SIZE),
+        egui::FontId::proportional(m.text_size),
         color,
     );
     ui.painter()

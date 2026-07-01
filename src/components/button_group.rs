@@ -13,12 +13,33 @@ use egui::{CornerRadius, Response, Sense, Stroke, StrokeKind, Ui, Vec2, Widget};
 
 use crate::components::dropdown_menu::DropdownMenu;
 use crate::components::icon::Icon;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Inline icon edge length (shadcn `size-4`).
-const ICON_SIZE: f32 = 16.0;
-/// Gap between a label and its trailing icon (shadcn `gap-1.5`).
-const ICON_GAP: f32 = 6.0;
+/// Overridable geometry for [`ButtonGroup`] — reach in via
+/// [`ButtonGroup::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct ButtonGroupMetrics {
+    /// Inline icon edge length (shadcn `size-4`).
+    pub icon_size: f32,
+    /// Gap between a label and its icon (shadcn `gap-1.5`).
+    pub icon_gap: f32,
+    /// Segment row height (`h-8`).
+    pub height: f32,
+    /// Horizontal padding inside each segment.
+    pub pad_x: f32,
+}
+
+impl Default for ButtonGroupMetrics {
+    fn default() -> Self {
+        Self {
+            icon_size: 16.0,
+            icon_gap: 6.0,
+            height: 32.0,
+            pad_x: 12.0,
+        }
+    }
+}
 
 /// Visual style of a [`ButtonGroup`]'s segments.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -63,6 +84,13 @@ pub struct ButtonGroup {
     variant: Variant,
     /// Stretch to fill the available width, distributing space evenly.
     full_width: bool,
+    sizing_hook: SizingHook<ButtonGroupMetrics>,
+}
+
+impl Sizeable<ButtonGroupMetrics> for ButtonGroup {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<ButtonGroupMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl ButtonGroup {
@@ -82,6 +110,7 @@ impl ButtonGroup {
             menu: None,
             variant: Variant::default(),
             full_width: false,
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -151,12 +180,13 @@ impl ButtonGroup {
     /// Render the group, returning which segment was clicked and which dropdown
     /// item (if any) was picked.
     #[allow(clippy::too_many_lines)] // one linear layout-then-paint pass; splitting it obscures the single measure->draw flow
-    pub fn show(self, ui: &mut Ui) -> ButtonGroupResponse {
+    pub fn show(mut self, ui: &mut Ui) -> ButtonGroupResponse {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let n = self.labels.len();
         let radius = tokens.radius_2xl();
-        let height = 32.0; // h-8
-        let pad_x = 12.0;
+        let height = m.height;
+        let pad_x = m.pad_x;
         // Semibold face so segment labels match shadcn's `font-medium` buttons.
         let font = crate::fonts::semibold(ui, 14.0);
 
@@ -177,16 +207,16 @@ impl ButtonGroup {
             .map(|(i, g)| {
                 let has_label = g.size().x > 0.0;
                 let lead_w = match &self.icons_start[i] {
-                    Some(_) if has_label => ICON_SIZE + ICON_GAP,
-                    Some(_) => ICON_SIZE,
+                    Some(_) if has_label => m.icon_size + m.icon_gap,
+                    Some(_) => m.icon_size,
                     None => 0.0,
                 };
                 let trail_w = match &self.icons[i] {
-                    Some(_) if has_label => ICON_GAP + ICON_SIZE,
-                    Some(_) => ICON_SIZE,
+                    Some(_) if has_label => m.icon_gap + m.icon_size,
+                    Some(_) => m.icon_size,
                     None => 0.0,
                 };
-                lead_w + g.size().x + trail_w + pad_x * 2.0
+                pad_x.mul_add(2.0, lead_w + g.size().x + trail_w)
             })
             .collect();
         let natural_w: f32 = seg_widths.iter().sum();
@@ -250,7 +280,7 @@ impl ButtonGroup {
                 paint_segment_content(
                     ui, &painter, seg, galley,
                     icon_start, icon_end,
-                    text_color, tokens,
+                    text_color, tokens, m,
                 );
 
                 x += seg_w;
@@ -308,18 +338,19 @@ fn paint_segment_content(
     icon_end: Option<Icon>,
     text_color: egui::Color32,
     tokens: Tokens,
+    m: ButtonGroupMetrics,
 ) {
     let galley_size = galley.size();
     let has_label = galley_size.x > 0.0;
 
     let lead_w = match icon_start {
-        Some(_) if has_label => ICON_SIZE + ICON_GAP,
-        Some(_) => ICON_SIZE,
+        Some(_) if has_label => m.icon_size + m.icon_gap,
+        Some(_) => m.icon_size,
         None => 0.0,
     };
     let trail_w = match icon_end {
-        Some(_) if has_label => ICON_GAP + ICON_SIZE,
-        Some(_) => ICON_SIZE,
+        Some(_) if has_label => m.icon_gap + m.icon_size,
+        Some(_) => m.icon_size,
         None => 0.0,
     };
     let run_w = lead_w + galley_size.x + trail_w;
@@ -328,21 +359,27 @@ fn paint_segment_content(
 
     if let Some(icon) = icon_start {
         let ir = egui::Rect::from_min_size(
-            egui::pos2(cx, cy - ICON_SIZE / 2.0),
-            Vec2::splat(ICON_SIZE),
+            egui::pos2(cx, cy - m.icon_size / 2.0),
+            Vec2::splat(m.icon_size),
         );
         icon.color(text_color).image(tokens).paint_at(ui, ir);
-        cx += if has_label { ICON_SIZE + ICON_GAP } else { ICON_SIZE };
+        cx += if has_label {
+            m.icon_size + m.icon_gap
+        } else {
+            m.icon_size
+        };
     }
     if has_label {
         painter.galley(egui::pos2(cx, cy - galley_size.y / 2.0), galley, text_color);
         cx += galley_size.x;
     }
     if let Some(icon) = icon_end {
-        if has_label { cx += ICON_GAP; }
+        if has_label {
+            cx += m.icon_gap;
+        }
         let ir = egui::Rect::from_min_size(
-            egui::pos2(cx, cy - ICON_SIZE / 2.0),
-            Vec2::splat(ICON_SIZE),
+            egui::pos2(cx, cy - m.icon_size / 2.0),
+            Vec2::splat(m.icon_size),
         );
         icon.color(text_color).image(tokens).paint_at(ui, ir);
     }
