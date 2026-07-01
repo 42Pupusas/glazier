@@ -26,10 +26,26 @@ use egui::{Frame, Response, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Edge length of the rounded media tile (shadcn `size-10`).
-const MEDIA_TILE: f32 = 40.0;
+/// Overridable geometry for [`Empty`] — reach in via [`Empty::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct EmptyMetrics {
+    /// Edge length of the rounded media tile (shadcn `size-10`).
+    pub media_tile: f32,
+    /// Icon glyph size inside the tile.
+    pub media_icon: f32,
+}
+
+impl Default for EmptyMetrics {
+    fn default() -> Self {
+        Self {
+            media_tile: 40.0,
+            media_icon: 20.0,
+        }
+    }
+}
 
 /// A centered empty-state placeholder.
 #[must_use = "empty states do nothing unless you show them"]
@@ -38,11 +54,18 @@ pub struct Empty {
     description: Option<String>,
     icon: Option<Icon>,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<EmptyMetrics>,
 }
 
 impl Customize<Frame> for Empty {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<EmptyMetrics> for Empty {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<EmptyMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -54,6 +77,7 @@ impl Empty {
             description: None,
             icon: None,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -73,6 +97,7 @@ impl Empty {
     /// for actions (buttons, links). The closure runs centered.
     pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Option<R> {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let mut out = None;
 
         let mut frame = Frame::new().inner_margin(24.0); // p-6
@@ -85,7 +110,7 @@ impl Empty {
                     ui.spacing_mut().item_spacing.y = 8.0;
 
                     if let Some(icon) = self.icon {
-                        media_tile(ui, tokens, icon);
+                        media_tile(ui, tokens, icon, m);
                         ui.add_space(4.0);
                     }
 
@@ -124,8 +149,8 @@ impl egui::Widget for Empty {
 }
 
 /// Paint the rounded media tile holding the icon (shadcn `bg-muted` `rounded-lg`).
-fn media_tile(ui: &mut Ui, tokens: Tokens, icon: Icon) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(MEDIA_TILE), Sense::hover());
+fn media_tile(ui: &mut Ui, tokens: Tokens, icon: Icon, m: EmptyMetrics) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(m.media_tile), Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter().rect(
             rect,
@@ -134,10 +159,13 @@ fn media_tile(ui: &mut Ui, tokens: Tokens, icon: Icon) {
             Stroke::NONE,
             StrokeKind::Inside,
         );
-        let image = icon.color(tokens.muted_foreground).size(20.0).image(tokens);
+        let image = icon
+            .color(tokens.muted_foreground)
+            .size(m.media_icon)
+            .image(tokens);
         image.paint_at(
             ui,
-            egui::Rect::from_center_size(rect.center(), Vec2::splat(20.0)),
+            egui::Rect::from_center_size(rect.center(), Vec2::splat(m.media_icon)),
         );
     }
 }

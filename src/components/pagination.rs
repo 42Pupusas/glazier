@@ -22,18 +22,36 @@
 
 use egui::{Response, Sense, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Edge of each page button (shadcn `size-9`).
-const BTN: f32 = 36.0;
-/// Width of a prev/next button (icon + label).
-const NAV_W: f32 = 92.0;
-/// Gap between controls.
-const GAP: f32 = 4.0;
-/// Label / number text size.
-const TEXT_SIZE: f32 = 13.0;
-/// How many pages to show before collapsing with ellipses.
-const WINDOW: usize = 1;
+/// Overridable geometry for [`Pagination`] — reach in via
+/// [`Pagination::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct PaginationMetrics {
+    /// Edge of each page button (shadcn `size-9`).
+    pub btn: f32,
+    /// Width of a prev/next button (icon + label).
+    pub nav_w: f32,
+    /// Gap between controls.
+    pub gap: f32,
+    /// Label / number text size.
+    pub text_size: f32,
+    /// How many pages to show before collapsing with ellipses.
+    pub window: usize,
+}
+
+impl Default for PaginationMetrics {
+    fn default() -> Self {
+        Self {
+            btn: 36.0,
+            nav_w: 92.0,
+            gap: 4.0,
+            text_size: 13.0,
+            window: 1,
+        }
+    }
+}
 
 /// One slot in the rendered control row.
 enum Slot {
@@ -47,45 +65,56 @@ enum Slot {
 #[must_use = "pagination does nothing unless shown"]
 pub struct Pagination {
     total: usize,
+    sizing_hook: SizingHook<PaginationMetrics>,
+}
+
+impl Sizeable<PaginationMetrics> for Pagination {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<PaginationMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Pagination {
     /// Create a control spanning `total` pages.
     pub const fn new(total: usize) -> Self {
-        Self { total }
+        Self {
+            total,
+            sizing_hook: SizingHook::new(),
+        }
     }
 
     /// Render the control. `page` is the current 0-based page; it is clamped to
     /// range, updated in place on navigation, and `true` is returned if it
     /// changed this frame.
-    pub fn show(self, ui: &mut Ui, page: &mut usize) -> bool {
+    pub fn show(mut self, ui: &mut Ui, page: &mut usize) -> bool {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let total = self.total.max(1);
         let current = (*page).min(total - 1);
         let mut next = current;
 
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(GAP, 0.0);
+            ui.spacing_mut().item_spacing = Vec2::new(m.gap, 0.0);
 
             // Previous.
-            if nav_button(ui, tokens, "Previous", true, current > 0).clicked() {
+            if nav_button(ui, tokens, "Previous", true, current > 0, m).clicked() {
                 next = current.saturating_sub(1);
             }
 
             // Numbered slots with ellipses.
-            for slot in slots(total, current) {
+            for slot in slots(total, current, m.window) {
                 match slot {
                     Slot::Page(p) => {
-                        if page_button(ui, tokens, p, p == current).clicked() {
+                        if page_button(ui, tokens, p, p == current, m).clicked() {
                             next = p;
                         }
                     }
-                    Slot::Ellipsis => ellipsis(ui, tokens),
+                    Slot::Ellipsis => ellipsis(ui, tokens, m),
                 }
             }
 
             // Next.
-            if nav_button(ui, tokens, "Next", false, current + 1 < total).clicked() {
+            if nav_button(ui, tokens, "Next", false, current + 1 < total, m).clicked() {
                 next = (current + 1).min(total - 1);
             }
         });
@@ -96,17 +125,18 @@ impl Pagination {
 }
 
 /// Compute the visible slot sequence: first and last page always show; a
-/// `WINDOW` of pages around the current page shows; gaps collapse to ellipses.
-fn slots(total: usize, current: usize) -> Vec<Slot> {
+/// `window` of pages around the current page shows; gaps collapse to
+/// ellipses.
+fn slots(total: usize, current: usize, window: usize) -> Vec<Slot> {
     // Few enough pages to show them all.
-    if total <= WINDOW * 2 + 5 {
+    if total <= window * 2 + 5 {
         return (0..total).map(Slot::Page).collect();
     }
 
     let mut out = Vec::new();
     let last = total - 1;
-    let lo = current.saturating_sub(WINDOW);
-    let hi = (current + WINDOW).min(last);
+    let lo = current.saturating_sub(window);
+    let hi = (current + window).min(last);
 
     out.push(Slot::Page(0));
     if lo > 1 {
@@ -123,8 +153,14 @@ fn slots(total: usize, current: usize) -> Vec<Slot> {
 }
 
 /// A numbered page button: `outline` chrome when active, `ghost` otherwise.
-fn page_button(ui: &mut Ui, tokens: Tokens, page: usize, active: bool) -> Response {
-    let (id, rect) = ui.allocate_space(Vec2::splat(BTN));
+fn page_button(
+    ui: &mut Ui,
+    tokens: Tokens,
+    page: usize,
+    active: bool,
+    m: PaginationMetrics,
+) -> Response {
+    let (id, rect) = ui.allocate_space(Vec2::splat(m.btn));
     let resp = ui
         .interact(rect, id.with(("page", page)), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -158,7 +194,7 @@ fn page_button(ui: &mut Ui, tokens: Tokens, page: usize, active: bool) -> Respon
     };
     let galley = ui.painter().layout_no_wrap(
         format!("{}", page + 1),
-        egui::FontId::proportional(TEXT_SIZE),
+        egui::FontId::proportional(m.text_size),
         color,
     );
     let pos = rect.center() - galley.size() / 2.0;
@@ -168,8 +204,15 @@ fn page_button(ui: &mut Ui, tokens: Tokens, page: usize, active: bool) -> Respon
 
 /// A Previous/Next button: a chevron plus label. Dims and stops sensing when
 /// `enabled` is false (at the respective end of the range).
-fn nav_button(ui: &mut Ui, tokens: Tokens, label: &str, prev: bool, enabled: bool) -> Response {
-    let (id, rect) = ui.allocate_space(Vec2::new(NAV_W, BTN));
+fn nav_button(
+    ui: &mut Ui,
+    tokens: Tokens,
+    label: &str,
+    prev: bool,
+    enabled: bool,
+    m: PaginationMetrics,
+) -> Response {
+    let (id, rect) = ui.allocate_space(Vec2::new(m.nav_w, m.btn));
     let resp = if enabled {
         ui.interact(rect, id.with((label, "nav")), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -200,7 +243,7 @@ fn nav_button(ui: &mut Ui, tokens: Tokens, label: &str, prev: bool, enabled: boo
     // Lay out chevron + label centred as a group.
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(TEXT_SIZE),
+        egui::FontId::proportional(m.text_size),
         color,
     );
     let chevron_w = 10.0;
@@ -239,8 +282,8 @@ fn chevron(ui: &Ui, c: egui::Pos2, w: f32, left: bool, stroke: egui::Stroke) {
 }
 
 /// Draw a non-interactive `…` gap at page-button width.
-fn ellipsis(ui: &mut Ui, tokens: Tokens) {
-    let (_, rect) = ui.allocate_space(Vec2::splat(BTN));
+fn ellipsis(ui: &mut Ui, tokens: Tokens, m: PaginationMetrics) {
+    let (_, rect) = ui.allocate_space(Vec2::splat(m.btn));
     let c = rect.center();
     let step = 5.0;
     for k in [-1.0_f32, 0.0, 1.0] {
@@ -283,11 +326,11 @@ mod tests {
     /// Small page counts show every page; large ones collapse with ellipses.
     #[test]
     fn slots_collapse() {
-        let small = slots(5, 0);
+        let small = slots(5, 0, 1);
         assert_eq!(small.len(), 5);
         assert!(small.iter().all(|s| matches!(s, Slot::Page(_))));
 
-        let big = slots(20, 10);
+        let big = slots(20, 10, 1);
         assert!(big.iter().any(|s| matches!(s, Slot::Ellipsis)));
         // First and last are always pages.
         assert!(matches!(big.first(), Some(Slot::Page(0))));
