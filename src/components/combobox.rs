@@ -28,6 +28,7 @@ use crate::components::dropdown_menu::DropdownMenu;
 use crate::components::icon::Icon;
 use crate::components::input::Input;
 use crate::components::scroll_area::ScrollArea;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// `chevron-down` (lucide) — the trailing affordance on the trigger.
@@ -35,24 +36,47 @@ const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 /// `check` (lucide) — marks the active option in the popup.
 const CHECK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#;
 
-/// Trigger height: `h-9` (36px).
-const HEIGHT: f32 = 36.0;
-/// Trigger horizontal padding (`px-3`).
-const PAD_X: f32 = 12.0;
-/// Value / option text size (`text-sm`).
-const TEXT: f32 = 14.0;
-/// Chevron edge length, plus the gap reserved before it.
-const CHEVRON: f32 = 16.0;
-const CHEVRON_GAP: f32 = 6.0;
-/// Option row padding inside the popover.
-const ITEM_PAD_X: f32 = 8.0;
-const ITEM_PAD_Y: f32 = 6.0;
-/// Minimum option height (`min-h-8`).
-const ITEM_MIN_H: f32 = 32.0;
-/// Leading check column width inside an option row.
-const CHECK_COL: f32 = 22.0;
-/// Maximum height of the scrolling option list (`max-h-...`).
-const LIST_MAX_H: f32 = 240.0;
+/// Overridable geometry for [`Combobox`] — reach in via [`Combobox::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct ComboboxMetrics {
+    /// Trigger height: `h-9` (36px).
+    pub height: f32,
+    /// Trigger horizontal padding (`px-3`).
+    pub pad_x: f32,
+    /// Value / option text size (`text-sm`).
+    pub text: f32,
+    /// Chevron edge length.
+    pub chevron: f32,
+    /// Gap reserved before the chevron.
+    pub chevron_gap: f32,
+    /// Option row horizontal padding inside the popover.
+    pub item_pad_x: f32,
+    /// Option row vertical padding inside the popover.
+    pub item_pad_y: f32,
+    /// Minimum option height (`min-h-8`).
+    pub item_min_h: f32,
+    /// Leading check column width inside an option row.
+    pub check_col: f32,
+    /// Maximum height of the scrolling option list (`max-h-...`).
+    pub list_max_h: f32,
+}
+
+impl Default for ComboboxMetrics {
+    fn default() -> Self {
+        Self {
+            height: 36.0,
+            pad_x: 12.0,
+            text: 14.0,
+            chevron: 16.0,
+            chevron_gap: 6.0,
+            item_pad_x: 8.0,
+            item_pad_y: 6.0,
+            item_min_h: 32.0,
+            check_col: 22.0,
+            list_max_h: 240.0,
+        }
+    }
+}
 
 /// A searchable dropdown picker bound to an index into a fixed option list.
 #[must_use = "comboboxes do nothing unless you show them"]
@@ -66,6 +90,13 @@ pub struct Combobox<'a> {
     id_salt: egui::Id,
     /// Use compact (reduced-padding) sizing for the search input.
     compact: bool,
+    sizing_hook: SizingHook<ComboboxMetrics>,
+}
+
+impl Sizeable<ComboboxMetrics> for Combobox<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<ComboboxMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> Combobox<'a> {
@@ -84,6 +115,7 @@ impl<'a> Combobox<'a> {
             width: None,
             id_salt: egui::Id::new("glazier-combobox"),
             compact: false,
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -127,14 +159,15 @@ impl<'a> Combobox<'a> {
 
     /// Render the trigger and (when open) the searchable popover. Returns the
     /// trigger [`Response`]; the chosen index is written back into `selected`.
-    pub fn show(self, ui: &mut Ui) -> Response {
+    pub fn show(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let width = self.width.unwrap_or_else(|| ui.available_width());
 
         // ---- Trigger: an outline row showing the value or placeholder. ----
         let value = self.options.get(*self.selected).map(String::as_str);
         let label = value.unwrap_or(&self.placeholder);
-        let response = trigger(ui, tokens, width, label, value.is_none());
+        let response = trigger(ui, tokens, width, label, value.is_none(), m);
 
         // ---- Popover: a search field over the filtered option list. ----
         // The panel width matches the trigger (with a sensible floor), and
@@ -182,7 +215,7 @@ impl<'a> Combobox<'a> {
                     .collect();
 
                 if matches.is_empty() {
-                    empty_row(ui, tokens, panel_w, &self.empty_text);
+                    empty_row(ui, tokens, panel_w, &self.empty_text, m);
                 } else {
                     // Render the rows, optionally inside a ScrollArea. We only
                     // wrap when the list *actually* overflows the cap: egui's
@@ -195,7 +228,8 @@ impl<'a> Combobox<'a> {
                         ui.spacing_mut().item_spacing = Vec2::ZERO;
                         for i in &matches {
                             let active = *i == *self.selected;
-                            if option_row(ui, tokens, panel_w, &self.options[*i], active).clicked()
+                            if option_row(ui, tokens, panel_w, &self.options[*i], active, m)
+                                .clicked()
                             {
                                 *self.selected = *i;
                                 ui.close();
@@ -204,9 +238,11 @@ impl<'a> Combobox<'a> {
                     };
 
                     #[allow(clippy::cast_precision_loss)] // tiny option counts
-                    let content_h = matches.len() as f32 * ITEM_MIN_H;
-                    if content_h > LIST_MAX_H {
-                        ScrollArea::new().max_height(LIST_MAX_H).show(ui, &mut rows);
+                    let content_h = matches.len() as f32 * m.item_min_h;
+                    if content_h > m.list_max_h {
+                        ScrollArea::new()
+                            .max_height(m.list_max_h)
+                            .show(ui, &mut rows);
                     } else {
                         rows(ui);
                     }
@@ -227,8 +263,15 @@ impl<'a> Combobox<'a> {
 
 /// Paint the outline trigger row (value/placeholder + trailing chevron) and
 /// return its click [`Response`].
-fn trigger(ui: &mut Ui, tokens: Tokens, width: f32, label: &str, is_placeholder: bool) -> Response {
-    let (rect, response) = ui.allocate_at_least(Vec2::new(width, HEIGHT), Sense::click());
+fn trigger(
+    ui: &mut Ui,
+    tokens: Tokens,
+    width: f32,
+    label: &str,
+    is_placeholder: bool,
+    m: ComboboxMetrics,
+) -> Response {
+    let (rect, response) = ui.allocate_at_least(Vec2::new(width, m.height), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     if ui.is_rect_visible(rect) {
@@ -249,10 +292,10 @@ fn trigger(ui: &mut Ui, tokens: Tokens, width: f32, label: &str, is_placeholder:
         // Trailing chevron.
         let chevron_rect = egui::Rect::from_min_size(
             egui::pos2(
-                rect.right() - PAD_X - CHEVRON,
-                rect.center().y - CHEVRON / 2.0,
+                rect.right() - m.pad_x - m.chevron,
+                rect.center().y - m.chevron / 2.0,
             ),
-            Vec2::splat(CHEVRON),
+            Vec2::splat(m.chevron),
         );
         Icon::new(CHEVRON_DOWN)
             .color(tokens.muted_foreground)
@@ -265,29 +308,38 @@ fn trigger(ui: &mut Ui, tokens: Tokens, width: f32, label: &str, is_placeholder:
         } else {
             tokens.foreground
         };
-        let avail = (PAD_X.mul_add(-2.0, rect.width()) - CHEVRON - CHEVRON_GAP).max(0.0);
+        let avail = (m.pad_x.mul_add(-2.0, rect.width()) - m.chevron - m.chevron_gap).max(0.0);
         let mut job = egui::text::LayoutJob::simple(
             label.to_owned(),
-            egui::FontId::proportional(TEXT),
+            egui::FontId::proportional(m.text),
             color,
             avail,
         );
         job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
         let galley = ui.painter().layout_job(job);
-        let pos = egui::pos2(rect.left() + PAD_X, rect.center().y - galley.size().y / 2.0);
+        let pos = egui::pos2(rect.left() + m.pad_x, rect.center().y - galley.size().y / 2.0);
         ui.painter().galley(pos, galley, color);
     }
     response
 }
 
 /// One option row: an accent-on-hover command with a leading check when active.
-fn option_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, active: bool) -> Response {
+fn option_row(
+    ui: &mut Ui,
+    tokens: Tokens,
+    width: f32,
+    text: &str,
+    active: bool,
+    m: ComboboxMetrics,
+) -> Response {
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
-        egui::FontId::proportional(TEXT),
+        egui::FontId::proportional(m.text),
         tokens.foreground,
     );
-    let height = 2.0_f32.mul_add(ITEM_PAD_Y, galley.size().y).max(ITEM_MIN_H);
+    let height = 2.0_f32
+        .mul_add(m.item_pad_y, galley.size().y)
+        .max(m.item_min_h);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -309,7 +361,7 @@ fn option_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, active: bool)
         // Leading check column (drawn only when active).
         if active {
             let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + ITEM_PAD_X, rect.center().y - 8.0),
+                egui::pos2(rect.left() + m.item_pad_x, rect.center().y - 8.0),
                 Vec2::splat(16.0),
             );
             Icon::new(CHECK)
@@ -319,11 +371,11 @@ fn option_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, active: bool)
         }
         let galley = ui.painter().layout_no_wrap(
             text.to_owned(),
-            egui::FontId::proportional(TEXT),
+            egui::FontId::proportional(m.text),
             text_color,
         );
         let pos = egui::pos2(
-            rect.left() + ITEM_PAD_X + CHECK_COL,
+            rect.left() + m.item_pad_x + m.check_col,
             rect.center().y - galley.size().y / 2.0,
         );
         ui.painter().galley(pos, galley, text_color);
@@ -332,14 +384,14 @@ fn option_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, active: bool)
 }
 
 /// The muted "no results" placeholder row, centered like shadcn's `CommandEmpty`.
-fn empty_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ITEM_MIN_H), Sense::hover());
+fn empty_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, m: ComboboxMetrics) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, m.item_min_h), Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             text,
-            egui::FontId::proportional(TEXT),
+            egui::FontId::proportional(m.text),
             tokens.muted_foreground,
         );
     }

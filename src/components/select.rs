@@ -19,33 +19,57 @@ use egui::{Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::components::dropdown_menu::DropdownMenu;
 use crate::components::icon::Icon;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
-
-/// Text size for group/section labels inside the popup (`text-xs`).
-const GROUP_LABEL_TEXT: f32 = 11.0;
-/// The popover frame's inner padding (mirrors [`DropdownMenu::frame`]'s
-/// `Margin::same(4)`) — used to bleed the separator to the frame edge.
-const POPUP_PAD: f32 = 4.0;
 
 /// `chevron-down` (lucide) — the trailing affordance.
 const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 /// `check` (lucide) — marks the active option in the popup.
 const CHECK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#;
 
-/// Trigger inner height: `h-8` (32px) minus the frame's 12px vertical padding.
-const ROW_HEIGHT: f32 = 20.0;
-/// Trigger horizontal / vertical padding (`px-3 py-2`).
-const PAD_X: i8 = 12;
-const PAD_Y: i8 = 6;
-/// Option row padding inside the popover.
-const ITEM_PAD_X: f32 = 8.0;
-const ITEM_PAD_Y: f32 = 6.0;
-/// Minimum option height (`min-h-8`).
-const ITEM_MIN_H: f32 = 32.0;
-/// Value / option text size (`text-sm`).
-const TEXT: f32 = 13.0;
-/// Leading check column width inside an option row.
-const CHECK_COL: f32 = 22.0;
+/// Overridable geometry for [`Select`] — reach in via [`Select::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct SelectMetrics {
+    /// Text size for group/section labels inside the popup (`text-xs`).
+    pub group_label_text: f32,
+    /// The popover frame's inner padding (mirrors [`DropdownMenu::frame`]'s
+    /// `Margin::same(4)`) — used to bleed the separator to the frame edge.
+    pub popup_pad: f32,
+    /// Trigger inner height: `h-8` (32px) minus the frame's 12px vertical
+    /// padding.
+    pub row_height: f32,
+    /// Trigger horizontal padding (`px-3`).
+    pub pad_x: f32,
+    /// Trigger vertical padding (`py-2`).
+    pub pad_y: f32,
+    /// Option row horizontal padding inside the popover.
+    pub item_pad_x: f32,
+    /// Option row vertical padding inside the popover.
+    pub item_pad_y: f32,
+    /// Minimum option height (`min-h-8`).
+    pub item_min_h: f32,
+    /// Value / option text size (`text-sm`).
+    pub text: f32,
+    /// Leading check column width inside an option row.
+    pub check_col: f32,
+}
+
+impl Default for SelectMetrics {
+    fn default() -> Self {
+        Self {
+            group_label_text: 11.0,
+            popup_pad: 4.0,
+            row_height: 20.0,
+            pad_x: 12.0,
+            pad_y: 6.0,
+            item_pad_x: 8.0,
+            item_pad_y: 6.0,
+            item_min_h: 32.0,
+            text: 13.0,
+            check_col: 22.0,
+        }
+    }
+}
 
 /// A dropdown picker bound to an index into a fixed option list.
 #[must_use = "selects do nothing unless you show them"]
@@ -58,6 +82,13 @@ pub struct Select<'a> {
     /// section headers + separators between groups instead of a flat list.
     /// Indices are into `options`.
     groups: Vec<(String, Vec<usize>)>,
+    sizing_hook: SizingHook<SelectMetrics>,
+}
+
+impl Sizeable<SelectMetrics> for Select<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<SelectMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> Select<'a> {
@@ -73,6 +104,7 @@ impl<'a> Select<'a> {
             placeholder: None,
             width: None,
             groups: Vec::new(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -108,8 +140,9 @@ impl<'a> Select<'a> {
 
     /// Render the trigger and (when open) the option popover. Returns the
     /// trigger [`Response`]; the chosen index is written back into `selected`.
-    pub fn show(self, ui: &mut Ui) -> Response {
+    pub fn show(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let width = self.width.unwrap_or_else(|| ui.available_width());
 
         let value = self
@@ -122,7 +155,7 @@ impl<'a> Select<'a> {
 
         // Allocate the whole trigger as ONE clickable rect (mirrors Button), so
         // the hover cursor + click land reliably — then paint into it.
-        let height = f32::from(PAD_Y).mul_add(2.0, ROW_HEIGHT); // h-8
+        let height = m.pad_y.mul_add(2.0, m.row_height); // h-8
         let (rect, response) = ui.allocate_at_least(Vec2::new(width, height), Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
@@ -141,7 +174,7 @@ impl<'a> Select<'a> {
                 StrokeKind::Inside,
             );
 
-            let pad_x = f32::from(PAD_X);
+            let pad_x = m.pad_x;
             // Trailing chevron.
             let chevron_rect = egui::Rect::from_min_size(
                 egui::pos2(rect.right() - pad_x - 16.0, rect.center().y - 8.0),
@@ -163,7 +196,7 @@ impl<'a> Select<'a> {
             let avail = (pad_x.mul_add(-2.0, rect.width()) - 22.0).max(0.0);
             let mut job = egui::text::LayoutJob::simple(
                 value.to_owned(),
-                egui::FontId::proportional(TEXT),
+                egui::FontId::proportional(m.text),
                 color,
                 avail,
             );
@@ -187,7 +220,7 @@ impl<'a> Select<'a> {
                 if groups.is_empty() {
                     // Flat list — original behaviour.
                     for (i, option) in self.options.iter().enumerate() {
-                        if option_row(ui, tokens, trigger_w, option, i == *self.selected)
+                        if option_row(ui, tokens, trigger_w, option, i == *self.selected, m)
                             .clicked()
                         {
                             *self.selected = i;
@@ -198,13 +231,13 @@ impl<'a> Select<'a> {
                     // Grouped list: section header → option rows → separator.
                     for (g_idx, (label, indices)) in groups.iter().enumerate() {
                         if g_idx > 0 {
-                            group_separator_row(ui, tokens, trigger_w);
+                            group_separator_row(ui, tokens, trigger_w, m);
                         }
-                        group_label_row(ui, tokens, trigger_w, label);
+                        group_label_row(ui, tokens, trigger_w, label, m);
                         for &opt_idx in indices {
                             if let Some(option) = self.options.get(opt_idx) {
                                 let active = opt_idx == *self.selected;
-                                if option_row(ui, tokens, trigger_w, option, active).clicked() {
+                                if option_row(ui, tokens, trigger_w, option, active, m).clicked() {
                                     *self.selected = opt_idx;
                                     ui.close();
                                 }
@@ -219,10 +252,10 @@ impl<'a> Select<'a> {
 }
 
 /// A muted, xs-weight section label row — mirrors `DropdownMenuEntry::Label`.
-fn group_label_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str) {
+fn group_label_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, m: SelectMetrics) {
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
-        egui::FontId::proportional(GROUP_LABEL_TEXT),
+        egui::FontId::proportional(m.group_label_text),
         tokens.muted_foreground,
     );
     // py-1 top + text height + a touch extra so it breathes.
@@ -230,7 +263,7 @@ fn group_label_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
     if ui.is_rect_visible(rect) {
         let pos = egui::pos2(
-            rect.left() + ITEM_PAD_X,
+            rect.left() + m.item_pad_x,
             rect.center().y - galley.size().y / 2.0,
         );
         ui.painter().galley(pos, galley, tokens.muted_foreground);
@@ -238,13 +271,13 @@ fn group_label_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str) {
 }
 
 /// A hairline separator between groups — bleeds to the popup frame edge.
-fn group_separator_row(ui: &mut Ui, tokens: Tokens, width: f32) {
+fn group_separator_row(ui: &mut Ui, tokens: Tokens, width: f32, m: SelectMetrics) {
     // 9px tall (4px margin + 1px line + 4px margin), matching `DropdownMenu`.
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 9.0), egui::Sense::hover());
     if ui.is_rect_visible(rect) {
         let y = rect.center().y.round();
         ui.painter().hline(
-            (rect.left() - POPUP_PAD)..=(rect.right() + POPUP_PAD),
+            (rect.left() - m.popup_pad)..=(rect.right() + m.popup_pad),
             y,
             egui::Stroke::new(1.0, tokens.border.gamma_multiply(0.5)),
         );
@@ -252,13 +285,22 @@ fn group_separator_row(ui: &mut Ui, tokens: Tokens, width: f32) {
 }
 
 /// One option row: an accent-on-hover command with a leading check when active.
-fn option_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, active: bool) -> Response {
+fn option_row(
+    ui: &mut Ui,
+    tokens: Tokens,
+    width: f32,
+    text: &str,
+    active: bool,
+    m: SelectMetrics,
+) -> Response {
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
-        egui::FontId::proportional(TEXT),
+        egui::FontId::proportional(m.text),
         tokens.foreground,
     );
-    let height = 2.0_f32.mul_add(ITEM_PAD_Y, galley.size().y).max(ITEM_MIN_H);
+    let height = 2.0_f32
+        .mul_add(m.item_pad_y, galley.size().y)
+        .max(m.item_min_h);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -280,7 +322,7 @@ fn option_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, active: bool)
         // Leading check column (drawn only when active).
         if active {
             let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + ITEM_PAD_X, rect.center().y - 8.0),
+                egui::pos2(rect.left() + m.item_pad_x, rect.center().y - 8.0),
                 Vec2::splat(16.0),
             );
             Icon::new(CHECK)
@@ -290,11 +332,11 @@ fn option_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, active: bool)
         }
         let galley = ui.painter().layout_no_wrap(
             text.to_owned(),
-            egui::FontId::proportional(TEXT),
+            egui::FontId::proportional(m.text),
             text_color,
         );
         let pos = egui::pos2(
-            rect.left() + ITEM_PAD_X + CHECK_COL,
+            rect.left() + m.item_pad_x + m.check_col,
             rect.center().y - galley.size().y / 2.0,
         );
         ui.painter().galley(pos, galley, text_color);
