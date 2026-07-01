@@ -25,6 +25,7 @@
 use egui::{Frame, Response, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Edge length of the rounded media tile (shadcn `size-10`).
@@ -36,6 +37,13 @@ pub struct Empty {
     title: String,
     description: Option<String>,
     icon: Option<Icon>,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Empty {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Empty {
@@ -45,6 +53,7 @@ impl Empty {
             title: title.into(),
             description: None,
             icon: None,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -62,12 +71,14 @@ impl Empty {
 
     /// Render the empty state, with an optional `content` slot beneath the text
     /// for actions (buttons, links). The closure runs centered.
-    pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Option<R> {
         let tokens = Tokens::get(ui);
         let mut out = None;
 
-        Frame::new()
-            .inner_margin(24.0) // p-6
+        let mut frame = Frame::new().inner_margin(24.0); // p-6
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
+
+        frame
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.vertical_centered(|ui| {

@@ -42,6 +42,7 @@ use egui::{
     Vec2,
 };
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Fraction of the row width a framed bubble may occupy before its content
@@ -91,20 +92,26 @@ pub enum Side {
     Bottom,
 }
 
-/// Resolved per-variant paint recipe.
-struct Style {
-    fill: Option<Color32>,
-    text: Color32,
-    stroke: Option<Stroke>,
+/// [`Bubble`]'s resolved per-variant paint — fill, text colour, border
+/// stroke, and framing. The real value [`Bubble`] paints with; reach in via
+/// [`Bubble::style`].
+#[derive(Clone, Copy, Debug)]
+pub struct BubbleStyle {
+    /// Background fill (`None` for the unframed `ghost` variant).
+    pub fill: Option<Color32>,
+    /// Content text colour.
+    pub text: Color32,
+    /// Border stroke, if any (used by [`Variant::Outline`]).
+    pub stroke: Option<Stroke>,
     /// Whether the bubble draws a padded surface (false for `ghost`).
-    framed: bool,
+    pub framed: bool,
     /// Whether the bubble may span the full row (true for `ghost`).
-    full_width: bool,
+    pub full_width: bool,
 }
 
 impl Variant {
-    fn style(self, t: Tokens) -> Style {
-        let framed = Style {
+    fn style(self, t: Tokens) -> BubbleStyle {
+        let framed = BubbleStyle {
             fill: None,
             text: t.foreground,
             stroke: None,
@@ -112,36 +119,36 @@ impl Variant {
             full_width: false,
         };
         match self {
-            Self::Default => Style {
+            Self::Default => BubbleStyle {
                 fill: Some(t.primary),
                 text: t.primary_foreground,
                 ..framed
             },
-            Self::Secondary => Style {
+            Self::Secondary => BubbleStyle {
                 fill: Some(t.secondary),
                 text: t.secondary_foreground,
                 ..framed
             },
-            Self::Muted => Style {
+            Self::Muted => BubbleStyle {
                 fill: Some(t.muted),
                 text: t.muted_foreground,
                 ..framed
             },
-            Self::Tinted => Style {
+            Self::Tinted => BubbleStyle {
                 fill: Some(tint(t.primary, t.card)),
                 ..framed
             },
-            Self::Outline => Style {
+            Self::Outline => BubbleStyle {
                 fill: Some(t.card),
                 stroke: Some(Stroke::new(1.0, t.border)),
                 ..framed
             },
-            Self::Destructive => Style {
+            Self::Destructive => BubbleStyle {
                 fill: Some(t.destructive),
                 text: t.destructive_foreground,
                 ..framed
             },
-            Self::Ghost => Style {
+            Self::Ghost => BubbleStyle {
                 framed: false,
                 full_width: true,
                 ..framed
@@ -159,11 +166,18 @@ pub struct Bubble {
     reactions_side: Side,
     reactions_align: Align,
     max_frac: f32,
+    style_hook: StyleHook<BubbleStyle>,
+}
+
+impl Customize<BubbleStyle> for Bubble {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<BubbleStyle> {
+        &mut self.style_hook
+    }
 }
 
 impl Bubble {
     /// Start a bubble with the given [`Variant`].
-    pub const fn new(variant: Variant) -> Self {
+    pub fn new(variant: Variant) -> Self {
         Self {
             variant,
             align: Align::Start,
@@ -171,6 +185,7 @@ impl Bubble {
             reactions_side: Side::Bottom,
             reactions_align: Align::End,
             max_frac: MAX_BUBBLE_FRAC,
+            style_hook: StyleHook::default(),
         }
     }
 
@@ -209,9 +224,10 @@ impl Bubble {
     }
 
     /// Render the bubble, drawing `content` inside the surface.
-    pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
+    pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
         let tokens = Tokens::get(ui);
-        let style = self.variant.style(tokens);
+        let mut style = self.variant.style(tokens);
+        std::mem::take(&mut self.style_hook).apply(&mut style);
         let end = self.align == Align::End;
 
         let full = ui.available_width();

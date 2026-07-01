@@ -47,16 +47,38 @@ that:
 (non-Frame, hand-painted), `Card`/`egui::Frame` (Frame-backed). Both shapes
 are exercised in `src/customize.rs`'s doctest.
 
-**Migration backlog** (retrofit `Customize`, then delete the matching one-off
-method): `Spinner::color`, `Marker::color`, `Badge::dot` (status dot is a
-genuinely distinct sub-element, not the badge's own surface — keep as a
-bespoke method, *not* a `Customize` candidate), `Message::bubble_fill`,
-`Chart::color`, every `Frame::new()...show()` component not yet wired
-(`Alert`, `Popover`, `Dialog`, `Sheet`, `Drawer`, `Tooltip`, `HoverCard`,
-`DropdownMenu`, `Input`, `InputGroup`, `Textarea`, `Item`, `Empty`, `Sonner`,
-`ScrollArea`, `NavigationMenu`, `SidebarMenu`). Each is a 10-line change
-(struct field + trait impl + one `.apply()` call) — do them opportunistically
-when touching a component, not as a single giant patch.
+**Migration status (2026-07-01): done.** Every component named in the
+original backlog now implements `Customize`, plus a few more found along the
+way:
+
+- Hand-painted style structs: `Spinner`/`SpinnerStyle`, `Marker`/`MarkerStyle`,
+  `Message`/`BubbleStyle` (message.rs), `Bubble`/`BubbleStyle` (bubble.rs, its
+  own resolved fill/text/stroke/framed/full_width record).
+- Frame-backed (`T = egui::Frame`): `Alert`, `Popover`, `HoverCard`, `Item`
+  (non-interactive path only — an `interactive` item paints its own
+  hover-eased fill with no single resolved frame to hand back), `Empty`,
+  `ScrollArea` (only takes effect when `bordered`), `Input`, `InputGroup`,
+  `Textarea`, `Tooltip`, `Dialog`, `AlertDialog`, `Sheet`, `Drawer` (all four
+  thread the hook through the shared `dialog::modal_shell`), `NavigationMenu`
+  (the flyout panel frame), `SidebarMenu` (the group's outer padding frame).
+- `Badge::dot` stayed bespoke on purpose, as originally called out — it's a
+  genuinely distinct sub-element (a status indicator), not the badge's own
+  surface.
+- **Not migrated, deliberately:** `Sonner`/`Toast`. A `Toast` is enqueued into
+  a `Vec<LiveToast>` in ctx memory and rendered later by `Toaster::show`,
+  which paints a *variable number* of cards per call from data, not a single
+  resolved value a one-shot `FnOnce` hook could target. Revisit if `StyleHook`
+  ever grows an `Fn`-based repeatable variant; not worth forcing today.
+- `Chart::color` is a per-series override already covering the one paintable
+  property a `Series` has (there's no broader chart "surface" style to
+  generalize into — the grid/legend/tooltip colours are all derived from
+  `Tokens` directly, by design, so a page's chart always matches its theme).
+  Left as-is; revisit only if a real need for overriding those surfaces shows up.
+
+Each migration was a ~10-line change: add `style_hook: StyleHook<T>` to the
+struct, `impl Customize<T>`, and one `style_hook.apply(&mut resolved)` right
+before painting (via `std::mem::take` where the paint path needed `&mut self`
+afterward, since `StyleHook::apply` takes `self` by value).
 
 ---
 

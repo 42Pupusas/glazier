@@ -18,6 +18,7 @@
 
 use egui::{Align2, Area, Color32, Frame, Margin, Order, Pos2, Response, Stroke, Ui, Vec2};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Tooltip text size (`text-xs`).
@@ -36,18 +37,28 @@ const DELAY: f32 = 0.4;
 #[must_use = "tooltips do nothing unless you show them"]
 pub struct Tooltip {
     text: String,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Tooltip {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Tooltip {
     /// Create a tooltip with the given label.
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
+        Self {
+            text: text.into(),
+            style_hook: StyleHook::new(),
+        }
     }
 
     /// Show the tooltip while `response` is hovered. It floats above the trigger
     /// (flipping below when there's no room) with a small arrow pointing at it,
     /// matching shadcn's dark bubble. Fades in after a short hover delay.
-    pub fn show(self, ui: &Ui, response: &Response) {
+    pub fn show(mut self, ui: &Ui, response: &Response) {
         let ctx = ui.ctx();
         let id = response.id.with("glazier-tooltip");
         let now = ctx.input(|i| i.time);
@@ -91,7 +102,7 @@ impl Tooltip {
         let screen = ctx.content_rect();
         let below = anchor.top() - screen.top() < 64.0;
 
-        let frame = Frame::new()
+        let mut frame = Frame::new()
             .fill(tokens.primary)
             .stroke(Stroke::NONE)
             .corner_radius(tokens.radius_md())
@@ -102,6 +113,7 @@ impl Tooltip {
                 spread: 0,
                 color: Color32::from_black_alpha(35),
             });
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
 
         // Anchor the bubble centered on the trigger, pushed off by the gap.
         let (pivot, pivot_pos) = if below {

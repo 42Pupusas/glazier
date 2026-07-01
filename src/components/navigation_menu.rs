@@ -28,6 +28,7 @@
 use egui::{Align2, Area, Id, Order, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// `chevron-down` (lucide) — the trailing affordance on menu triggers.
@@ -124,6 +125,13 @@ struct PanelGeom {
 pub struct NavigationMenu {
     id_salt: Id,
     items: Vec<NavItem>,
+    style_hook: StyleHook<egui::Frame>,
+}
+
+impl Customize<egui::Frame> for NavigationMenu {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<egui::Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl NavigationMenu {
@@ -133,6 +141,7 @@ impl NavigationMenu {
         Self {
             id_salt: Id::new(id_salt),
             items: Vec::new(),
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -145,7 +154,7 @@ impl NavigationMenu {
     /// Render the bar and (when open) the flyout panel. `panel` renders the
     /// body for the open menu, given its trigger index. Returns a
     /// [`NavResponse`] describing link clicks this frame.
-    pub fn show(self, ui: &mut Ui, panel: impl FnOnce(usize, &mut Ui)) -> NavResponse {
+    pub fn show(mut self, ui: &mut Ui, panel: impl FnOnce(usize, &mut Ui)) -> NavResponse {
         let tokens = Tokens::get(ui);
         let ctx = ui.ctx().clone();
         let state_id = self.id_salt.with("nav-state");
@@ -202,7 +211,8 @@ impl NavigationMenu {
                 width,
                 open,
             };
-            state.panel_hovered = Self::show_panel(ui, tokens, geom, panel);
+            let style_hook = std::mem::take(&mut self.style_hook);
+            state.panel_hovered = Self::show_panel(ui, tokens, geom, style_hook, panel);
         } else {
             state.panel_hovered = false;
         }
@@ -262,6 +272,7 @@ impl NavigationMenu {
         ui: &Ui,
         tokens: Tokens,
         geom: PanelGeom,
+        style_hook: StyleHook<egui::Frame>,
         panel: impl FnOnce(usize, &mut Ui),
     ) -> bool {
         let PanelGeom {
@@ -282,7 +293,7 @@ impl NavigationMenu {
         }
         let top = bar_rect.bottom() + GAP;
 
-        let frame = egui::Frame::new()
+        let mut frame = egui::Frame::new()
             .fill(tokens.background)
             .stroke(Stroke::new(1.0, tokens.border))
             .corner_radius(tokens.radius_2xl())
@@ -293,6 +304,7 @@ impl NavigationMenu {
                 spread: 0,
                 color: egui::Color32::from_black_alpha(45),
             });
+        style_hook.apply(&mut frame);
 
         let inner = Area::new(state_id.with("panel"))
             .order(Order::Foreground)

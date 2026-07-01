@@ -12,6 +12,7 @@
 
 use egui::{Frame, Response, Stroke, Ui, Vec2, Widget};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// A scrollable viewport with a styled thin scrollbar.
@@ -41,6 +42,13 @@ pub struct ScrollArea {
     /// allocated rect — set this to the enclosing panel's inner padding so
     /// the bar sits flush with the panel border rather than floating inset.
     right_bleed: Option<f32>,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for ScrollArea {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl ScrollArea {
@@ -53,6 +61,7 @@ impl ScrollArea {
             bordered: false,
             inner_margin: None,
             right_bleed: None,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -120,16 +129,21 @@ impl ScrollArea {
     }
 
     /// Render `content` inside the clipped, scrollable viewport.
-    pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
+    pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
         let tokens = Tokens::get(ui);
 
-        // The bordered chrome is a rounded `border` frame; without it we render
+        // The bordered chrome is a rounded border frame; without it we render
         // the bare viewport. Either way the inner scroll logic is identical.
+        // A style hook only takes effect here (bordered) -- a non-bordered
+        // viewport paints no frame to customize.
         if self.bordered {
             let margin = self.inner_margin;
-            Frame::new()
+            let style_hook = std::mem::take(&mut self.style_hook);
+            let mut frame = Frame::new()
                 .stroke(Stroke::new(1.0, tokens.border))
-                .corner_radius(tokens.radius_md())
+                .corner_radius(tokens.radius_md());
+            style_hook.apply(&mut frame);
+            frame
                 .show(ui, |ui| {
                     Self {
                         bordered: false,

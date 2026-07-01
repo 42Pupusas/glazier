@@ -27,10 +27,11 @@
 //!     });
 //! ```
 
-use egui::{Sense, Vec2};
+use egui::{Frame, Sense, Vec2};
 
 pub use crate::components::dialog::Side;
 use crate::components::dialog::{close_button, modal_shell, ModalStyle};
+use crate::customize::{Customize, StyleHook};
 use crate::fonts;
 use crate::tokens::Tokens;
 
@@ -50,6 +51,13 @@ pub struct Drawer {
     width: f32,
     show_close: bool,
     show_grip: bool,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Drawer {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Drawer {
@@ -62,6 +70,7 @@ impl Drawer {
             width: DEFAULT_WIDTH,
             show_close: false,
             show_grip: true,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -74,6 +83,7 @@ impl Drawer {
             width: DEFAULT_WIDTH,
             show_close: false,
             show_grip: true,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -115,13 +125,14 @@ impl Drawer {
     /// `open` is cleared to `false` when dismissed (grip, × button, backdrop
     /// click, or Escape).
     pub fn show<R>(
-        self,
+        mut self,
         ctx: &egui::Context,
         open: &mut bool,
         content: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
         let id = egui::Id::new("glazier-drawer").with(self.title.as_deref().unwrap_or("untitled"));
         let side = self.side;
+        let style_hook = std::mem::take(&mut self.style_hook);
 
         let mut closed = false;
         let out = modal_shell(
@@ -130,6 +141,7 @@ impl Drawer {
             *open,
             ModalStyle::Drawer(side),
             self.width,
+            style_hook,
             |ui, tokens, _width| {
                 ui.spacing_mut().item_spacing = Vec2::new(0.0, 16.0); // gap-4
 

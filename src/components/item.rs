@@ -11,6 +11,7 @@
 
 use egui::{Frame, Response, Sense, Stroke, Ui, Widget};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Visual style of an [`Item`], mirroring shadcn's `variant` prop.
@@ -41,6 +42,13 @@ pub enum Variant {
 pub struct Item {
     variant: Variant,
     interactive: Option<egui::Id>,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Item {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Item {
@@ -49,6 +57,7 @@ impl Item {
         Self {
             variant: Variant::Default,
             interactive: None,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -68,7 +77,10 @@ impl Item {
     }
 
     /// Render the item with `content` inside its padded surface.
-    pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
+    ///
+    /// [`style`](Item::style) only affects the non-[`interactive`](Item::interactive)
+    /// path.
+    pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
         let tokens = Tokens::get(ui);
 
         // An interactive item must know its hover state *before* it paints the
@@ -109,11 +121,14 @@ impl Item {
             Variant::Muted => (tokens.muted.gamma_multiply(0.5), Stroke::NONE),
         };
 
-        Frame::new()
+        let mut frame = Frame::new()
             .fill(fill)
             .stroke(stroke)
             .corner_radius(tokens.radius_2xl())
-            .inner_margin(14.0)
+            .inner_margin(14.0);
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
+
+        frame
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 content(ui);

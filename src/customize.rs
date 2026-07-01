@@ -64,6 +64,15 @@ pub struct StyleHook<T>(Option<StyleFn<T>>);
 
 impl<T> Default for StyleHook<T> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> StyleHook<T> {
+    /// Create an empty hook (no closure recorded). `const` so it can seed a
+    /// component's `const fn new()`.
+    #[must_use]
+    pub const fn new() -> Self {
         Self(None)
     }
 }

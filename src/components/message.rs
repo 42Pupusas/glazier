@@ -4,8 +4,8 @@
 //! start/end alignment, and the header and footer slots. The visible message
 //! surface (shadcn's `Bubble`) is baked in as a rounded frame — `received`
 //! messages ([`Align::Start`]) use the `muted` surface, `sent` messages
-//! ([`Align::End`]) use the `primary` surface — and you can override the fill
-//! with [`bubble_fill`](Message::bubble_fill).
+//! ([`Align::End`]) use the `primary` surface — and you can reach into that
+//! resolved [`BubbleStyle`] (fill + text colour) via [`Message::style`].
 //!
 //! Faithful to shadcn's feature list:
 //! - **start/end alignment** via [`align`](Message::align) — sender rows hug the
@@ -21,6 +21,7 @@
 use egui::{Align, Color32, Frame, Rect, Response, RichText, Ui, Vec2};
 
 use crate::components::avatar::Avatar;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// The result of [`Message::show`].
@@ -81,8 +82,24 @@ pub struct Message {
     avatar: Option<Avatar>,
     header: Option<String>,
     footer: Option<String>,
-    bubble_fill: Option<Color32>,
     max_bubble_frac: Option<f32>,
+    style_hook: StyleHook<BubbleStyle>,
+}
+
+/// [`Message`]'s resolved bubble paint — fill and text colour. The real value
+/// the bubble surface paints with; reach in via [`Message::style`].
+#[derive(Clone, Copy, Debug)]
+pub struct BubbleStyle {
+    /// Bubble background fill.
+    pub fill: Color32,
+    /// Bubble text colour.
+    pub text: Color32,
+}
+
+impl Customize<BubbleStyle> for Message {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<BubbleStyle> {
+        &mut self.style_hook
+    }
 }
 
 impl Message {
@@ -123,13 +140,6 @@ impl Message {
         self
     }
 
-    /// Override the bubble fill colour (defaults to `muted` for start rows,
-    /// `primary` for end rows).
-    pub const fn bubble_fill(mut self, fill: Color32) -> Self {
-        self.bubble_fill = Some(fill);
-        self
-    }
-
     /// Cap the bubble at this fraction of the row width before its content
     /// wraps (default `0.78`).
     pub const fn max_bubble_frac(mut self, frac: f32) -> Self {
@@ -142,16 +152,13 @@ impl Message {
         let tokens = Tokens::get(ui);
         let end = self.align == Side::End;
 
-        let (fill, text_color) = self.bubble_fill.map_or_else(
-            || {
-                if end {
-                    (tokens.primary, tokens.primary_foreground)
-                } else {
-                    (tokens.muted, tokens.foreground)
-                }
-            },
-            |f| (f, tokens.foreground),
-        );
+        let mut style = if end {
+            BubbleStyle { fill: tokens.primary, text: tokens.primary_foreground }
+        } else {
+            BubbleStyle { fill: tokens.muted, text: tokens.foreground }
+        };
+        self.style_hook.apply(&mut style);
+        let BubbleStyle { fill, text: text_color } = style;
 
         let avatar_d = self.avatar.as_ref().map_or(0.0, Avatar::diameter_value);
         let avatar_slot = if self.avatar.is_some() {

@@ -22,6 +22,7 @@
 
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+use crate::customize::{Customize, StyleHook};
 use crate::icon::Icon;
 use crate::tokens::Tokens;
 
@@ -57,6 +58,13 @@ pub struct SidebarMenu {
     label: String,
     items: Vec<SidebarMenuItem>,
     collapsed: bool,
+    style_hook: StyleHook<egui::Frame>,
+}
+
+impl Customize<egui::Frame> for SidebarMenu {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<egui::Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl SidebarMenu {
@@ -66,6 +74,7 @@ impl SidebarMenu {
             label: label.into(),
             items: Vec::new(),
             collapsed: false,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -106,10 +115,12 @@ impl SidebarMenu {
 
     /// Render the group, highlighting the item at `*active` and updating it when
     /// a row is clicked. Returns the index of the clicked item, if any.
-    pub fn show(self, ui: &mut Ui, active: &mut usize) -> Option<usize> {
+    pub fn show(mut self, ui: &mut Ui, active: &mut usize) -> Option<usize> {
         let tokens = Tokens::get(ui);
         let mut clicked = None;
-        egui::Frame::new().inner_margin(GROUP_PAD).show(ui, |ui| {
+        let mut frame = egui::Frame::new().inner_margin(GROUP_PAD);
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
+        frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing = Vec2::ZERO;
 

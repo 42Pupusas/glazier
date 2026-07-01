@@ -9,6 +9,7 @@
 use egui::{Color32, Frame, Margin, Response, RichText, Stroke, TextEdit, Ui, Vec2, Widget};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Inner content height: `h-8` (32px) minus the frame's 4px vertical padding.
@@ -33,6 +34,13 @@ pub struct InputGroup<'a> {
     icon_start: Option<Icon>,
     icon_end: Option<Icon>,
     width: Option<f32>,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for InputGroup<'_> {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl<'a> InputGroup<'a> {
@@ -46,6 +54,7 @@ impl<'a> InputGroup<'a> {
             icon_start: None,
             icon_end: None,
             width: None,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -92,15 +101,16 @@ fn filled_input(tokens: Tokens) -> Color32 {
 }
 
 impl Widget for InputGroup<'_> {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
         let width = self.width.unwrap_or_else(|| ui.available_width());
 
-        let frame = Frame::new()
+        let mut frame = Frame::new()
             .fill(filled_input(tokens))
             .corner_radius(tokens.radius_2xl())
             .stroke(Stroke::NONE)
             .inner_margin(Margin::symmetric(10, 4));
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
 
         frame
             .show(ui, |ui| {

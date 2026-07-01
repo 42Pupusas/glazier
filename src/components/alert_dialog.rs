@@ -28,10 +28,11 @@
 //! }
 //! ```
 
-use egui::{Vec2, Widget as _};
+use egui::{Frame, Vec2, Widget as _};
 
 use crate::components::button::{Button, Size, Variant};
 use crate::components::dialog::{modal_shell, ModalStyle};
+use crate::customize::{Customize, StyleHook};
 use crate::fonts;
 use crate::tokens::Tokens;
 
@@ -56,6 +57,13 @@ pub struct AlertDialog {
     description: Option<String>,
     cancel: String,
     action: String,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for AlertDialog {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl AlertDialog {
@@ -67,6 +75,7 @@ impl AlertDialog {
             description: None,
             cancel: "Cancel".to_owned(),
             action: "Continue".to_owned(),
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -92,8 +101,9 @@ impl AlertDialog {
     /// paints nothing while fully closed. `open` is cleared to `false` when the
     /// dialog should close; the returned [`AlertChoice`] reports *how* it closed
     /// (or `None` if it stayed open / was already shut this frame).
-    pub fn show(self, ctx: &egui::Context, open: &mut bool) -> Option<AlertChoice> {
+    pub fn show(mut self, ctx: &egui::Context, open: &mut bool) -> Option<AlertChoice> {
         let id = egui::Id::new("glazier-alert-dialog");
+        let style_hook = std::mem::take(&mut self.style_hook);
 
         let mut choice = None;
         let out = modal_shell(
@@ -102,6 +112,7 @@ impl AlertDialog {
             *open,
             ModalStyle::Center,
             CONTENT_WIDTH,
+            style_hook,
             |ui, tokens, width| {
                 ui.spacing_mut().item_spacing = Vec2::new(0.0, 24.0); // gap-6
                 self.body(ui, tokens, width, &mut choice);

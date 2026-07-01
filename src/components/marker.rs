@@ -19,6 +19,7 @@
 use egui::{Color32, Response, Sense, Ui, Vec2, Widget};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Marker text size (shadcn `text-sm`, tuned to the transcript scale).
@@ -65,7 +66,15 @@ pub struct Marker {
     variant: Variant,
     icon: Option<Icon>,
     shimmer: bool,
-    color: Option<Color32>,
+    style_hook: StyleHook<MarkerStyle>,
+}
+
+/// [`Marker`]'s resolved paint — the text/icon colour. The real value
+/// [`Marker`] paints with; reach in via [`Marker::style`].
+#[derive(Clone, Copy, Debug)]
+pub struct MarkerStyle {
+    /// Text + icon colour (defaults to `muted_foreground`).
+    pub color: Color32,
 }
 
 impl Marker {
@@ -76,7 +85,7 @@ impl Marker {
             variant: Variant::default(),
             icon: None,
             shimmer: false,
-            color: None,
+            style_hook: StyleHook::default(),
         }
     }
 
@@ -99,18 +108,22 @@ impl Marker {
         self.shimmer = shimmer;
         self
     }
+}
 
-    /// Override the text/icon colour (defaults to `muted_foreground`).
-    pub const fn color(mut self, color: Color32) -> Self {
-        self.color = Some(color);
-        self
+impl Customize<MarkerStyle> for Marker {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<MarkerStyle> {
+        &mut self.style_hook
     }
 }
 
 impl Widget for Marker {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
-        let color = self.color.unwrap_or(tokens.muted_foreground);
+        let mut style = MarkerStyle {
+            color: tokens.muted_foreground,
+        };
+        self.style_hook.apply(&mut style);
+        let MarkerStyle { color } = style;
 
         if self.variant == Variant::Separator {
             return separator(ui, &self.text, color, tokens);

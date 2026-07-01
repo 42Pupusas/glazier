@@ -11,6 +11,7 @@
 use eframe::egui;
 use egui::{Color32, RichText, Vec2, Widget as _};
 use glazier::{
+    Customize as _,
     accordion::Accordion,
     alert::{self, Alert},
     alert_dialog::AlertDialog,
@@ -1983,7 +1984,9 @@ fn forms_card(ui: &mut egui::Ui, tokens: Tokens, state: &mut State) {
                 if state.loading {
                     Spinner::new()
                         .size(18.0)
-                        .color(tokens.muted_foreground)
+                        .style(move |s: &mut glazier::spinner::SpinnerStyle| {
+                            s.color = tokens.muted_foreground;
+                        })
                         .ui(ui);
                     Typography::new("Loading…", typography::Variant::Muted)
                         .size(13.0)

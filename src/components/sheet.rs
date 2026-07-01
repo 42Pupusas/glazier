@@ -32,9 +32,10 @@
 //!     });
 //! ```
 
-use egui::Vec2;
+use egui::{Frame, Vec2};
 
 use crate::components::dialog::{close_button, modal_shell, ModalStyle, Side};
+use crate::customize::{Customize, StyleHook};
 use crate::fonts;
 use crate::tokens::Tokens;
 
@@ -50,6 +51,13 @@ pub struct Sheet {
     side: Side,
     size: f32,
     show_close: bool,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Sheet {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Sheet {
@@ -61,6 +69,7 @@ impl Sheet {
             side: Side::Right,
             size: SHEET_SIZE,
             show_close: true,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -96,12 +105,13 @@ impl Sheet {
     /// `open` is cleared to `false` when dismissed (× button, backdrop click,
     /// or Escape).
     pub fn show<R>(
-        self,
+        mut self,
         ctx: &egui::Context,
         open: &mut bool,
         content: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
         let id = egui::Id::new("glazier-sheet").with(&self.title);
+        let style_hook = std::mem::take(&mut self.style_hook);
 
         let mut closed = false;
         let out = modal_shell(
@@ -110,6 +120,7 @@ impl Sheet {
             *open,
             ModalStyle::Sheet(self.side),
             self.size,
+            style_hook,
             |ui, tokens, _width| {
                 ui.spacing_mut().item_spacing = Vec2::new(0.0, 16.0); // gap-4
                 self.header(ui, tokens, &mut closed);

@@ -42,10 +42,10 @@ pub use components::{
     Breadcrumb, Bubble, BubbleGroup, Button, ButtonGroup, ButtonStyle, Calendar, Card, Carousel, Chart,
     Checkbox, Collapsible, Combobox, Command, CommandGroup, CommandItem, ContextMenu, DataColumn,
     DataTable, Date, DatePicker, Dialog, Drawer, DropdownMenu, Empty, Field, Grid, HoverCard, Icon,
-    Input, InputGroup, InputOtp, Item, Kbd, Label, Marker, Menubar, MenubarMenu, Message,
+    Input, InputGroup, InputOtp, Item, Kbd, Label, Marker, MarkerStyle, Menubar, MenubarMenu, Message,
     MessageGroup, MessageResponse, MessageScroller, NativeSelect, NavItem, NavResponse, NavigationMenu, OtpMode,
     Pagination, Popover, Progress, RadioGroup, Resizable, ScrollArea, Select, Separator, Sheet,
-    Sidebar, SidebarMenu, SidebarTrigger, Sizing, Skeleton, Slider, Spinner, Switch, Table, Tabs,
+    Sidebar, SidebarMenu, SidebarTrigger, Sizing, Skeleton, Slider, Spinner, SpinnerStyle, Switch, Table, Tabs,
     TabsResponse, Textarea, Time, TimePicker, Toast, Toaster, Toggle, ToggleGroup, Tooltip, Typography,
 };
 pub use customize::{Customize, StyleHook};

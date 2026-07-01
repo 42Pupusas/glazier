@@ -35,6 +35,7 @@ use egui::emath::TSTransform;
 use egui::{Align2, Frame, Margin, Modal, Sense, Stroke, Vec2};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::fonts;
 use crate::tokens::Tokens;
 
@@ -235,6 +236,7 @@ pub(crate) fn modal_shell<R>(
     open: bool,
     style: ModalStyle,
     width: f32,
+    style_hook: StyleHook<Frame>,
     content: impl FnOnce(&mut egui::Ui, Tokens, f32) -> R,
 ) -> Option<(R, bool)> {
     // Drive a single 0→1 progress toward `open`. Run every frame so it sits at 0
@@ -254,9 +256,10 @@ pub(crate) fn modal_shell<R>(
     let Geometry {
         anchor,
         transform,
-        frame,
+        mut frame,
         content_width,
     } = geometry(style, t, width, viewport, tokens);
+    style_hook.apply(&mut frame);
 
     let mut inner = None;
     let area = Modal::default_area(id).anchor(anchor, Vec2::ZERO);
@@ -311,6 +314,13 @@ pub struct Dialog {
     description: Option<String>,
     width: f32,
     show_close: bool,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Dialog {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Dialog {
@@ -321,6 +331,7 @@ impl Dialog {
             description: None,
             width: CONTENT_WIDTH,
             show_close: true,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -350,12 +361,13 @@ impl Dialog {
     /// fully closed). `open` is cleared to `false` when the dialog is dismissed
     /// (× button, backdrop click, or Escape).
     pub fn show<R>(
-        self,
+        mut self,
         ctx: &egui::Context,
         open: &mut bool,
         content: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
         let id = egui::Id::new("glazier-dialog").with(&self.title);
+        let style_hook = std::mem::take(&mut self.style_hook);
 
         let mut closed = false;
         let out = modal_shell(
@@ -364,6 +376,7 @@ impl Dialog {
             *open,
             ModalStyle::Center,
             self.width,
+            style_hook,
             |ui, tokens, _width| {
                 ui.spacing_mut().item_spacing = Vec2::new(0.0, 16.0); // gap-4
                 self.header(ui, tokens, &mut closed);

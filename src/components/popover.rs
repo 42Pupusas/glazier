@@ -22,6 +22,7 @@
 
 use egui::{Frame, Margin, PopupCloseBehavior, RectAlign, Response, Stroke, Ui};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// A click-anchored floating content panel.
@@ -31,6 +32,13 @@ pub struct Popover {
     gap: f32,
     align: Option<RectAlign>,
     close_behavior: PopupCloseBehavior,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Popover {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Default for Popover {
@@ -47,6 +55,7 @@ impl Popover {
             gap: 6.0,
             align: None,
             close_behavior: PopupCloseBehavior::CloseOnClick,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -100,7 +109,7 @@ impl Popover {
     /// Toggle the panel from `trigger`'s clicks and, while open, render
     /// `content` inside the floating card. Dismisses on click-outside or Escape.
     pub fn show<R>(
-        self,
+        mut self,
         ui: &Ui,
         trigger: &Response,
         content: impl FnOnce(&mut Ui) -> R,
@@ -108,11 +117,13 @@ impl Popover {
         let tokens = Tokens::get(ui);
         let width = self.width;
         let align = self.align;
+        let mut frame = Self::frame(tokens);
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
         // `Popup::menu` toggles its own open-state off the trigger's click and
         // dismisses on click-outside — exactly shadcn's behaviour. We only
         // restyle the frame, set the close behaviour, and host content.
         let mut popup = egui::Popup::menu(trigger)
-            .frame(Self::frame(tokens))
+            .frame(frame)
             .close_behavior(self.close_behavior)
             .gap(self.gap);
         if let Some(align) = align {

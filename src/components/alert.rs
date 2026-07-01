@@ -9,6 +9,7 @@
 use egui::{Frame, Response, RichText, Stroke, Ui, Widget};
 
 use crate::components::icon::Icon;
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Visual style of an [`Alert`], mirroring shadcn's `variant` prop.
@@ -46,6 +47,13 @@ pub struct Alert {
     description: Option<String>,
     icon: Option<Icon>,
     variant: Variant,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Alert {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Alert {
@@ -56,6 +64,7 @@ impl Alert {
             description: None,
             icon: None,
             variant: Variant::default(),
+            style_hook: StyleHook::default(),
         }
     }
 
@@ -92,11 +101,14 @@ impl Widget for Alert {
             Variant::Destructive => (tokens.destructive, tokens.destructive),
         };
 
-        Frame::new()
+        let mut frame = Frame::new()
             .fill(tokens.card)
             .stroke(Stroke::new(1.0, border))
             .corner_radius(tokens.radius_lg())
-            .inner_margin(16.0)
+            .inner_margin(16.0);
+        self.style_hook.apply(&mut frame);
+
+        frame
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_top(|ui| {

@@ -24,6 +24,7 @@
 
 use egui::{Area, Frame, Margin, Order, Response, Stroke, Ui, Vec2};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Hover delay before the card appears, in seconds (shadcn's default ~700ms,
@@ -57,6 +58,13 @@ pub struct HoverCard {
     open_delay: f32,
     close_delay: f32,
     gap: f32,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for HoverCard {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl Default for HoverCard {
@@ -73,6 +81,7 @@ impl HoverCard {
             open_delay: OPEN_DELAY,
             close_delay: CLOSE_DELAY,
             gap: GAP,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -105,7 +114,7 @@ impl HoverCard {
     /// The card stays open while the pointer is over it, dismissing a beat
     /// after the pointer leaves both.
     pub fn show<R>(
-        self,
+        mut self,
         ui: &Ui,
         response: &Response,
         content: impl FnOnce(&mut Ui) -> R,
@@ -171,7 +180,7 @@ impl HoverCard {
             )
         };
 
-        let frame = Frame::new()
+        let mut frame = Frame::new()
             .fill(tokens.background)
             .stroke(Stroke::new(1.0, tokens.border))
             .corner_radius(tokens.radius_2xl())
@@ -182,6 +191,7 @@ impl HoverCard {
                 spread: 0,
                 color: egui::Color32::from_black_alpha(45),
             });
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
 
         let area = Area::new(id)
             .order(Order::Foreground)

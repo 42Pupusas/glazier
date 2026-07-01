@@ -14,6 +14,7 @@
 
 use egui::{Frame, Margin, Response, Stroke, StrokeKind, TextEdit, Ui, Vec2, Widget};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Full height (`h-9`) — matches shadcn default.
@@ -44,6 +45,13 @@ pub struct Input<'a> {
     /// and sidebar panels where the default `h-9` is too tall relative to
     /// surrounding 32 px rows.
     compact: bool,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Input<'_> {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl<'a> Input<'a> {
@@ -58,6 +66,7 @@ impl<'a> Input<'a> {
             invalid: false,
             width: None,
             compact: false,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -116,7 +125,7 @@ impl<'a> Input<'a> {
 }
 
 impl Widget for Input<'_> {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
         let width = self.width.unwrap_or_else(|| ui.available_width());
 
@@ -139,7 +148,7 @@ impl Widget for Input<'_> {
         // (10 px gap + 16 px icon + 10 px gap to text = 36 px total).
         let left_margin: i8 = if self.icon_start.is_some() { 36 } else { 12 };
 
-        let frame = Frame::new()
+        let mut frame = Frame::new()
             .fill(fill)
             .corner_radius(tokens.radius_md())
             .inner_margin(Margin {
@@ -148,6 +157,7 @@ impl Widget for Input<'_> {
                 top: v_pad,
                 bottom: v_pad,
             });
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
 
         let mut edit = TextEdit::singleline(self.text)
             .frame(frame)

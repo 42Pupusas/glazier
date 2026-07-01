@@ -17,6 +17,7 @@
 
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2, Widget};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// Default edge length in points — shadcn's `size-4`.
@@ -28,13 +29,21 @@ const GAP: f32 = 0.25;
 /// Number of straight segments approximating the arc.
 const STEPS: usize = 48;
 
+/// [`Spinner`]'s resolved paint — stroke colour and thickness. The real value
+/// [`Spinner`] paints with; reach in via [`Spinner::style`].
+#[derive(Clone, Copy, Debug)]
+pub struct SpinnerStyle {
+    /// Arc stroke colour (defaults to `foreground`).
+    pub color: Color32,
+    /// Stroke width in points (defaults to ~`size / 8`).
+    pub thickness: f32,
+}
+
 /// An indeterminate spinning loader.
 #[must_use = "spinners do nothing unless you add them to a Ui"]
-#[derive(Clone, Copy)]
 pub struct Spinner {
     size: f32,
-    color: Option<Color32>,
-    thickness: Option<f32>,
+    style_hook: StyleHook<SpinnerStyle>,
 }
 
 impl Default for Spinner {
@@ -45,11 +54,10 @@ impl Default for Spinner {
 
 impl Spinner {
     /// Create a spinner at the default `size-4` (16px), tinted `foreground`.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             size: DEFAULT_SIZE,
-            color: None,
-            thickness: None,
+            style_hook: StyleHook::default(),
         }
     }
 
@@ -58,26 +66,23 @@ impl Spinner {
         self.size = size;
         self
     }
+}
 
-    /// Tint the spinner. Defaults to the active `foreground` token.
-    pub const fn color(mut self, color: Color32) -> Self {
-        self.color = Some(color);
-        self
-    }
-
-    /// Override the stroke width. Defaults to ~`size / 8` (matching lucide's
-    /// `stroke-width="2"` at 16px).
-    pub const fn thickness(mut self, thickness: f32) -> Self {
-        self.thickness = Some(thickness);
-        self
+impl Customize<SpinnerStyle> for Spinner {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<SpinnerStyle> {
+        &mut self.style_hook
     }
 }
 
 impl Widget for Spinner {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
-        let color = self.color.unwrap_or(tokens.foreground);
-        let thickness = self.thickness.unwrap_or(self.size / 8.0);
+        let mut style = SpinnerStyle {
+            color: tokens.foreground,
+            thickness: self.size / 8.0,
+        };
+        self.style_hook.apply(&mut style);
+        let SpinnerStyle { color, thickness } = style;
 
         let (rect, response) = ui.allocate_at_least(Vec2::splat(self.size), Sense::hover());
 

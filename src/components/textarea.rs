@@ -6,6 +6,7 @@
 
 use egui::{Color32, Frame, Margin, Response, Stroke, TextEdit, Ui, Vec2, Widget};
 
+use crate::customize::{Customize, StyleHook};
 use crate::tokens::Tokens;
 
 /// A multi-line text input.
@@ -24,6 +25,13 @@ pub struct Textarea<'a> {
     placeholder: Option<String>,
     rows: usize,
     width: Option<f32>,
+    style_hook: StyleHook<Frame>,
+}
+
+impl Customize<Frame> for Textarea<'_> {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
+        &mut self.style_hook
+    }
 }
 
 impl<'a> Textarea<'a> {
@@ -34,6 +42,7 @@ impl<'a> Textarea<'a> {
             placeholder: None,
             rows: 3,
             width: None,
+            style_hook: StyleHook::new(),
         }
     }
 
@@ -62,16 +71,17 @@ fn filled_input(tokens: Tokens) -> Color32 {
 }
 
 impl Widget for Textarea<'_> {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
         let width = self.width.unwrap_or_else(|| ui.available_width());
 
         // Filled surface, transparent border, rounded-2xl.
-        let frame = Frame::new()
+        let mut frame = Frame::new()
             .fill(filled_input(tokens))
             .corner_radius(tokens.radius_2xl())
             .stroke(Stroke::NONE)
             .inner_margin(Margin::symmetric(10, 8));
+        std::mem::take(&mut self.style_hook).apply(&mut frame);
 
         let mut edit = TextEdit::multiline(self.text)
             .frame(frame)
