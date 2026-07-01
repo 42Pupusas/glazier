@@ -293,8 +293,10 @@ impl NavigationMenu {
         }
         let top = bar_rect.bottom() + GAP;
 
+        // Opaque `card` (popover) surface — `background` is the app-canvas
+        // token and may be translucent under a user theme.
         let mut frame = egui::Frame::new()
-            .fill(tokens.background)
+            .fill(tokens.card)
             .stroke(Stroke::new(1.0, tokens.border))
             .corner_radius(tokens.radius_2xl())
             .inner_margin(egui::Margin::same(16))

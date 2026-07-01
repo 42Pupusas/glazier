@@ -272,13 +272,14 @@ fn list_inner(
             egui::pos2(chip_x, track.top() + TRACK_PAD),
             Vec2::new(chip_w, INNER_H),
         );
-        // Soft shadow + background fill so the active trigger floats.
+        // Soft shadow + opaque `card` fill so the active trigger floats above
+        // the (possibly translucent) app `background`.
         painter.rect_filled(
             chip.translate(Vec2::new(0.0, 1.0)),
             inner_radius(tokens),
             tokens.border.gamma_multiply(0.5),
         );
-        painter.rect_filled(chip, inner_radius(tokens), tokens.background);
+        painter.rect_filled(chip, inner_radius(tokens), tokens.card);
     }
 
     let mut clicked: Option<usize> = None;
@@ -357,11 +358,7 @@ fn list_inner(
 
         // Close button.
         if closable && close_rect.is_positive() {
-            let close_resp = ui.interact(
-                close_rect,
-                base_id.with(("close", i)),
-                Sense::click(),
-            );
+            let close_resp = ui.interact(close_rect, base_id.with(("close", i)), Sense::click());
             if close_resp.clicked() {
                 closed = Some(i);
             }
@@ -376,10 +373,14 @@ fn list_inner(
                 let c = close_rect.center();
                 let h = CLOSE_SZ * 0.22;
                 let stroke = Stroke::new(1.4, tokens.muted_foreground);
-                ui.painter()
-                    .line_segment([egui::pos2(c.x - h, c.y - h), egui::pos2(c.x + h, c.y + h)], stroke);
-                ui.painter()
-                    .line_segment([egui::pos2(c.x + h, c.y - h), egui::pos2(c.x - h, c.y + h)], stroke);
+                ui.painter().line_segment(
+                    [egui::pos2(c.x - h, c.y - h), egui::pos2(c.x + h, c.y + h)],
+                    stroke,
+                );
+                ui.painter().line_segment(
+                    [egui::pos2(c.x + h, c.y - h), egui::pos2(c.x - h, c.y + h)],
+                    stroke,
+                );
             }
         }
 

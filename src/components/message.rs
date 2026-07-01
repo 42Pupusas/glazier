@@ -153,12 +153,21 @@ impl Message {
         let end = self.align == Side::End;
 
         let mut style = if end {
-            BubbleStyle { fill: tokens.primary, text: tokens.primary_foreground }
+            BubbleStyle {
+                fill: tokens.primary,
+                text: tokens.primary_foreground,
+            }
         } else {
-            BubbleStyle { fill: tokens.muted, text: tokens.foreground }
+            BubbleStyle {
+                fill: tokens.muted,
+                text: tokens.foreground,
+            }
         };
         self.style_hook.apply(&mut style);
-        let BubbleStyle { fill, text: text_color } = style;
+        let BubbleStyle {
+            fill,
+            text: text_color,
+        } = style;
 
         let avatar_d = self.avatar.as_ref().map_or(0.0, Avatar::diameter_value);
         let avatar_slot = if self.avatar.is_some() {
@@ -266,7 +275,10 @@ impl Message {
             avatar.paint_at(ui, rect);
         }
 
-        MessageResponse { response: inner.response, bubble_rect }
+        MessageResponse {
+            response: inner.response,
+            bubble_rect,
+        }
     }
 }
 

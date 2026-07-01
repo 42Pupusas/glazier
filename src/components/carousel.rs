@@ -126,11 +126,9 @@ impl Carousel {
                 // active slide slides in from the side it advanced toward.
                 #[allow(clippy::cast_precision_loss)]
                 let current_f = current as f32;
-                let anim = ui.ctx().animate_value_with_time(
-                    id.with("slide"),
-                    current_f,
-                    m.slide_time,
-                );
+                let anim =
+                    ui.ctx()
+                        .animate_value_with_time(id.with("slide"), current_f, m.slide_time);
                 let dx = (anim - current_f) * rect.width();
 
                 let mut child = ui.new_child(
@@ -200,7 +198,9 @@ fn arrow(
     } else {
         0.0
     };
-    let fill = tokens.background.lerp_to_gamma(tokens.accent, hover_t);
+    // Opaque `card` base, not `background` — the app-canvas token can be
+    // translucent, which would make this arrow button see-through.
+    let fill = tokens.card.lerp_to_gamma(tokens.accent, hover_t);
     let stroke_c = if enabled {
         tokens.border
     } else {

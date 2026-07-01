@@ -159,7 +159,13 @@ impl<'a> Accordion<'a> {
                     painter.galley(egui::pos2(rect.left(), ty), galley, text_col);
 
                     let center = egui::pos2(rect.right() - m.chevron / 2.0, rect.center().y);
-                    paint_chevron(painter, center, openness, tokens.muted_foreground, m.chevron);
+                    paint_chevron(
+                        painter,
+                        center,
+                        openness,
+                        tokens.muted_foreground,
+                        m.chevron,
+                    );
                 }
 
                 // Body.

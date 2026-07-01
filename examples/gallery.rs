@@ -11,7 +11,6 @@
 use eframe::egui;
 use egui::{Color32, RichText, Vec2, Widget as _};
 use glazier::{
-    Customize as _,
     accordion::Accordion,
     alert::{self, Alert},
     alert_dialog::AlertDialog,
@@ -72,6 +71,7 @@ use glazier::{
     tokens::Tokens,
     tooltip::Tooltip,
     typography::{self, Typography},
+    Customize as _,
 };
 
 /// Raw [lucide](https://lucide.dev) icon markup, fed straight to [`Icon`].

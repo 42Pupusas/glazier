@@ -93,8 +93,10 @@ impl Popover {
     /// The popover [`Frame`]: popover surface, `rounded-2xl`, `p-4`, a hairline
     /// ring and a soft shadow.
     pub fn frame(tokens: Tokens) -> Frame {
+        // Opaque `card` (popover) surface — `background` is the app-canvas
+        // token and may be translucent under a user theme.
         Frame::new()
-            .fill(tokens.background)
+            .fill(tokens.card)
             .stroke(Stroke::new(1.0, tokens.border))
             .corner_radius(tokens.radius_2xl())
             .inner_margin(Margin::same(16)) // p-4

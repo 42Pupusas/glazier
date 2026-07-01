@@ -124,8 +124,7 @@ fn radio_item(
     let label_w = galley.as_ref().map_or(0.0, |g| gap + g.size().x);
     let height = galley.as_ref().map_or(m.dot, |g| g.size().y.max(m.dot));
 
-    let (rect, response) =
-        ui.allocate_at_least(Vec2::new(m.dot + label_w, height), Sense::click());
+    let (rect, response) = ui.allocate_at_least(Vec2::new(m.dot + label_w, height), Sense::click());
 
     // Eased selection value so the ring colour + inner dot glide in/out.
     let t = ui
@@ -155,6 +154,9 @@ fn radio_item(
 }
 
 /// shadcn's `bg-input/90`: the input color blended slightly toward the surface.
+///
+/// Blends toward the opaque `card` surface, not `background` — the app-canvas
+/// token can be translucent, which would leak through this control's fill.
 fn filled_input(tokens: Tokens) -> Color32 {
-    tokens.input.lerp_to_gamma(tokens.background, 0.1)
+    tokens.input.lerp_to_gamma(tokens.card, 0.1)
 }

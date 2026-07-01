@@ -356,10 +356,8 @@ impl DataTable {
         let (id, rect) = ui.allocate_space(Vec2::new(total, m.row_h));
         let mut x = rect.left();
         for (i, col) in self.columns.iter().enumerate() {
-            let cell = egui::Rect::from_min_size(
-                egui::pos2(x, rect.top()),
-                Vec2::new(widths[i], m.row_h),
-            );
+            let cell =
+                egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(widths[i], m.row_h));
             x += widths[i] + m.col_gap;
 
             let active = state.sort_col == Some(i);

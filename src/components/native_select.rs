@@ -132,10 +132,12 @@ impl<'a> NativeSelect<'a> {
             } else {
                 Stroke::new(1.0, tokens.input)
             };
+            // Opaque `card` surface — `background` is the app-canvas token
+            // and may be translucent under a user theme.
             ui.painter().rect(
                 rect,
                 tokens.radius_md(),
-                tokens.background,
+                tokens.card,
                 stroke,
                 StrokeKind::Inside,
             );
@@ -159,8 +161,7 @@ impl<'a> NativeSelect<'a> {
             } else {
                 tokens.foreground
             };
-            let avail =
-                (m.pad_x.mul_add(-2.0, rect.width()) - m.chevron - m.chevron_gap).max(0.0);
+            let avail = (m.pad_x.mul_add(-2.0, rect.width()) - m.chevron - m.chevron_gap).max(0.0);
             let mut job = egui::text::LayoutJob::simple(
                 value.to_owned(),
                 egui::FontId::proportional(m.text),
@@ -169,7 +170,10 @@ impl<'a> NativeSelect<'a> {
             );
             job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
             let galley = ui.painter().layout_job(job);
-            let pos = egui::pos2(rect.left() + m.pad_x, rect.center().y - galley.size().y / 2.0);
+            let pos = egui::pos2(
+                rect.left() + m.pad_x,
+                rect.center().y - galley.size().y / 2.0,
+            );
             ui.painter().galley(pos, galley, color);
         }
 
@@ -182,9 +186,7 @@ impl<'a> NativeSelect<'a> {
                 ui.set_min_width(trigger_w);
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
                 for (i, option) in self.options.iter().enumerate() {
-                    if option_row(ui, tokens, trigger_w, option, i == *self.selected, m)
-                        .clicked()
-                    {
+                    if option_row(ui, tokens, trigger_w, option, i == *self.selected, m).clicked() {
                         *self.selected = i;
                         ui.close();
                     }

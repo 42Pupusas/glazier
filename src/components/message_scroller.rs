@@ -321,7 +321,8 @@ impl<'a> MessageScroller<'a> {
 
         // Floating jump-to-latest button: shown only when the reader has left
         // the live edge and there is somewhere below to go.
-        if show_button && can_scroll && !at_bottom && jump_button(ui, id, out.inner_rect, tokens, m) {
+        if show_button && can_scroll && !at_bottom && jump_button(ui, id, out.inner_rect, tokens, m)
+        {
             state.pending = Pending::End;
             ui.ctx().request_repaint();
         }
@@ -467,7 +468,11 @@ fn jump_button(
     };
     let painter = ui.painter();
     painter.circle_filled(center, m.button / 2.0, fill);
-    painter.circle_stroke(center, m.button / 2.0, egui::Stroke::new(1.0, tokens.border));
+    painter.circle_stroke(
+        center,
+        m.button / 2.0,
+        egui::Stroke::new(1.0, tokens.border),
+    );
     paint_chevron_down(painter, center, tokens.primary_foreground);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()

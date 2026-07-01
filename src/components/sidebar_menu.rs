@@ -152,7 +152,9 @@ impl SidebarMenu {
 fn label_row(ui: &mut Ui, tokens: Tokens, text: &str, hidden: bool) {
     let (rect, _) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), LABEL_H), Sense::hover());
-    if hidden || !ui.is_rect_visible(rect) { return; }
+    if hidden || !ui.is_rect_visible(rect) {
+        return;
+    }
     let color = tokens.muted_foreground;
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
@@ -214,10 +216,9 @@ fn item_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool
         let text_x = icon_rect.right() + ICON_GAP;
         // A trailing badge pill (shadcn `SidebarMenuBadge`) reserves room on the
         // right so the label truncates before it rather than under it.
-        let badge_w = item
-            .badge
-            .as_deref()
-            .map_or(0.0, |b| badge_pill(ui, tokens, rect, b, highlight_t) + ICON_GAP);
+        let badge_w = item.badge.as_deref().map_or(0.0, |b| {
+            badge_pill(ui, tokens, rect, b, highlight_t) + ICON_GAP
+        });
         let avail = (rect.right() - ITEM_PAD_X - badge_w - text_x).max(0.0);
         let mut job = egui::text::LayoutJob::simple(item.label.clone(), font, fg, avail);
         job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
@@ -281,10 +282,7 @@ fn badge_pill(ui: &Ui, tokens: Tokens, row: Rect, text: &str, highlight_t: f32) 
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, fg);
     let pad = Vec2::new(6.0, 1.0);
     let size = galley.size() + pad * 2.0;
-    let center = egui::pos2(
-        row.right() - ITEM_PAD_X - size.x / 2.0,
-        row.center().y,
-    );
+    let center = egui::pos2(row.right() - ITEM_PAD_X - size.x / 2.0, row.center().y);
     let pill = egui::Rect::from_center_size(center, size);
     ui.painter().rect(
         pill,

@@ -178,7 +178,16 @@ impl Tooltip {
             .inner;
 
         // Paint the arrow as a small triangle bridging the bubble and trigger.
-        paint_arrow(ctx, id, inner, anchor.center().x, below, tokens.primary, t, m);
+        paint_arrow(
+            ctx,
+            id,
+            inner,
+            anchor.center().x,
+            below,
+            tokens.primary,
+            t,
+            m,
+        );
     }
 }
 

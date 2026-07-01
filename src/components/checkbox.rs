@@ -85,7 +85,9 @@ impl Widget for Checkbox<'_> {
             )
         });
         let label_w = galley.as_ref().map_or(0.0, |g| gap + g.size().x);
-        let height = galley.as_ref().map_or(m.box_size, |g| g.size().y.max(m.box_size));
+        let height = galley
+            .as_ref()
+            .map_or(m.box_size, |g| g.size().y.max(m.box_size));
 
         let (rect, mut response) =
             ui.allocate_at_least(Vec2::new(m.box_size + label_w, height), Sense::click());
@@ -96,9 +98,9 @@ impl Widget for Checkbox<'_> {
         }
 
         // Eased on/off value so the fill, border and check glide in.
-        let t = ui
-            .ctx()
-            .animate_bool_with_time(response.id.with("on"), *self.checked, m.toggle_time);
+        let t =
+            ui.ctx()
+                .animate_bool_with_time(response.id.with("on"), *self.checked, m.toggle_time);
 
         if ui.is_rect_visible(rect) {
             let box_rect = egui::Rect::from_min_size(
@@ -108,8 +110,9 @@ impl Widget for Checkbox<'_> {
             let radius = tokens.radius_sm();
             let painter = ui.painter();
             // Border fades out as the fill fades in; fill lerps from the empty
-            // surface to `primary`.
-            let fill = tokens.background.lerp_to_gamma(tokens.primary, t);
+            // (opaque `card`) surface to `primary` — not `background`, which
+            // may be translucent under a user theme.
+            let fill = tokens.card.lerp_to_gamma(tokens.primary, t);
             let border = Stroke::new(1.0, tokens.input.gamma_multiply(1.0 - t));
             painter.rect(box_rect, radius, fill, border, egui::StrokeKind::Inside);
             if t > 0.01 {

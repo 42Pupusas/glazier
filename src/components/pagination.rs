@@ -170,10 +170,12 @@ fn page_button(
         .animate_bool_with_time(id.with(("hover", page)), resp.hovered(), 0.15);
 
     if active {
+        // Opaque `card` surface — `background` is the (potentially
+        // translucent) app canvas token, not a widget fill.
         ui.painter().rect(
             rect,
             tokens.radius_md(),
-            tokens.background,
+            tokens.card,
             egui::Stroke::new(1.0, tokens.border),
             egui::StrokeKind::Inside,
         );

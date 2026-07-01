@@ -281,10 +281,12 @@ fn trigger(
         } else {
             Stroke::new(1.0, tokens.input)
         };
+        // Opaque `card` surface — `background` is the app-canvas token and
+        // may be translucent under a user theme.
         ui.painter().rect(
             rect,
             tokens.radius_md(),
-            tokens.background,
+            tokens.card,
             stroke,
             StrokeKind::Inside,
         );
@@ -317,7 +319,10 @@ fn trigger(
         );
         job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
         let galley = ui.painter().layout_job(job);
-        let pos = egui::pos2(rect.left() + m.pad_x, rect.center().y - galley.size().y / 2.0);
+        let pos = egui::pos2(
+            rect.left() + m.pad_x,
+            rect.center().y - galley.size().y / 2.0,
+        );
         ui.painter().galley(pos, galley, color);
     }
     response

@@ -178,7 +178,16 @@ impl<'a> DatePicker<'a> {
         // Two layouts share one popover: a button-style trigger (default) or a
         // typeable field + trailing icon-button (the "with input" variant).
         let trigger = if let Some(buf) = buffer.as_deref_mut() {
-            input_trigger(ui, tokens, selected, buf, &placeholder, width, &mut changed, m)
+            input_trigger(
+                ui,
+                tokens,
+                selected,
+                buf,
+                &placeholder,
+                width,
+                &mut changed,
+                m,
+            )
         } else {
             button_trigger(ui, tokens, *selected, &placeholder, width, m)
         };
@@ -233,7 +242,7 @@ fn button_trigger(
             trigger.hovered(),
             m.hover_time,
         );
-        let fill = tokens.background.lerp_to_gamma(tokens.accent, hover_t);
+        let fill = tokens.card.lerp_to_gamma(tokens.accent, hover_t);
         ui.painter().rect(
             rect,
             tokens.radius_md(),
@@ -324,7 +333,7 @@ fn icon_button(ui: &mut Ui, tokens: Tokens, m: DatePickerMetrics) -> Response {
         let hover_t =
             ui.ctx()
                 .animate_bool_with_time(resp.id.with("hover"), resp.hovered(), m.hover_time);
-        let fill = tokens.background.lerp_to_gamma(tokens.accent, hover_t);
+        let fill = tokens.card.lerp_to_gamma(tokens.accent, hover_t);
         ui.painter().rect(
             rect,
             tokens.radius_md(),

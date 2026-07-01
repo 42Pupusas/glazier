@@ -189,7 +189,8 @@ impl Resizable {
 
         // Paint the divider hairline.
         let divider_paint_color = self.divider_color.unwrap_or(tokens.border);
-        ui.painter().rect_filled(divider_rect, 0.0, divider_paint_color);
+        ui.painter()
+            .rect_filled(divider_rect, 0.0, divider_paint_color);
 
         // Interact over a wider hit-strip centred on the divider.
         let hit = if horizontal {

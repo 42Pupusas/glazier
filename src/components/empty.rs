@@ -103,34 +103,33 @@ impl Empty {
         let mut frame = Frame::new().inner_margin(24.0); // p-6
         std::mem::take(&mut self.style_hook).apply(&mut frame);
 
-        frame
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.vertical_centered(|ui| {
-                    ui.spacing_mut().item_spacing.y = 8.0;
+        frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                ui.spacing_mut().item_spacing.y = 8.0;
 
-                    if let Some(icon) = self.icon {
-                        media_tile(ui, tokens, icon, m);
-                        ui.add_space(4.0);
-                    }
+                if let Some(icon) = self.icon {
+                    media_tile(ui, tokens, icon, m);
+                    ui.add_space(4.0);
+                }
 
+                ui.label(
+                    RichText::new(&self.title)
+                        .font(crate::fonts::semibold(ui, 16.0))
+                        .color(tokens.foreground),
+                );
+
+                if let Some(description) = &self.description {
                     ui.label(
-                        RichText::new(&self.title)
-                            .font(crate::fonts::semibold(ui, 16.0))
-                            .color(tokens.foreground),
+                        RichText::new(description)
+                            .color(tokens.muted_foreground)
+                            .size(13.0),
                     );
+                }
 
-                    if let Some(description) = &self.description {
-                        ui.label(
-                            RichText::new(description)
-                                .color(tokens.muted_foreground)
-                                .size(13.0),
-                        );
-                    }
-
-                    out = Some(content(ui));
-                });
+                out = Some(content(ui));
             });
+        });
 
         out
     }

@@ -160,11 +160,12 @@ impl Breadcrumb {
             .crumbs
             .iter()
             .map(|c| match c {
-                Crumb::Link(s) | Crumb::Page(s) => ui
-                    .painter()
-                    .layout_no_wrap(s.clone(), font.clone(), egui::Color32::PLACEHOLDER)
-                    .size()
-                    .x,
+                Crumb::Link(s) | Crumb::Page(s) => {
+                    ui.painter()
+                        .layout_no_wrap(s.clone(), font.clone(), egui::Color32::PLACEHOLDER)
+                        .size()
+                        .x
+                }
                 Crumb::Ellipsis => m.ellipsis_btn,
             })
             .sum();

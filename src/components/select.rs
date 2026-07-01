@@ -161,8 +161,10 @@ impl<'a> Select<'a> {
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
-            // bg-input/50, deepening slightly on hover.
-            let mut fill = tokens.input.lerp_to_gamma(tokens.background, 0.5);
+            // bg-input/50, deepening slightly on hover. Blends toward the
+            // opaque `card` surface, not `background` — the app-canvas token
+            // can be translucent, which would leak through this trigger.
+            let mut fill = tokens.input.lerp_to_gamma(tokens.card, 0.5);
             if hovered {
                 fill = fill.gamma_multiply(0.92);
             }

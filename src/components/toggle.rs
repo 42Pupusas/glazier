@@ -151,7 +151,11 @@ impl Widget for Toggle<'_> {
         );
         let has_label = rich.size().x > 0.0;
         let has_icon = self.icon.is_some();
-        let gap = if has_label && has_icon { m.icon_gap } else { 0.0 };
+        let gap = if has_label && has_icon {
+            m.icon_gap
+        } else {
+            0.0
+        };
         let icon_w = if has_icon { m.icon_size } else { 0.0 };
         let content_w = rich.size().x + icon_w + gap;
 
@@ -192,7 +196,9 @@ impl Widget for Toggle<'_> {
                     let fill = if lit < 0.01 {
                         Color32::TRANSPARENT
                     } else {
-                        tokens.background.lerp_to_gamma(tokens.accent, lit)
+                        // `card`, not `background` — the app-canvas token can
+                        // be translucent under a user theme.
+                        tokens.card.lerp_to_gamma(tokens.accent, lit)
                     };
                     let text = tokens
                         .foreground
@@ -212,7 +218,9 @@ impl Widget for Toggle<'_> {
                     let off = if hover_t < 0.01 {
                         Color32::TRANSPARENT
                     } else {
-                        tokens.background.lerp_to_gamma(tokens.accent, hover_t)
+                        // `card`, not `background` — the app-canvas token can
+                        // be translucent under a user theme.
+                        tokens.card.lerp_to_gamma(tokens.accent, hover_t)
                     };
                     let fill = off.lerp_to_gamma(tokens.primary, on_t);
                     let text = tokens

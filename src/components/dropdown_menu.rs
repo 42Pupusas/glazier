@@ -96,8 +96,11 @@ impl DropdownMenu {
     /// The popover [`Frame`] for this menu: `rounded-2xl`, popover surface,
     /// `p-1`, a hairline ring and a soft shadow.
     pub fn frame(tokens: Tokens) -> Frame {
+        // Opaque `card` (popover) surface — `background` is the app-canvas
+        // token and may be translucent under a user theme, which would make
+        // this floating menu see-through.
         Frame::new()
-            .fill(tokens.background)
+            .fill(tokens.card)
             .stroke(Stroke::new(1.0, tokens.border))
             .corner_radius(tokens.radius_2xl())
             .inner_margin(Margin::same(PAD))

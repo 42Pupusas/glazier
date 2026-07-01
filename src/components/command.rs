@@ -37,32 +37,54 @@ use egui::{Key, Sense, Stroke, StrokeKind, TextEdit, Ui, Vec2};
 use crate::components::icon::Icon;
 use crate::components::kbd::Kbd;
 use crate::components::scroll_area::ScrollArea;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 use egui::Widget as _;
 
 /// `search` (lucide) — the leading glyph in the search header.
 const SEARCH: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>"#;
 
-/// Item / input text size (`text-sm`).
-const TEXT: f32 = 14.0;
-/// Group heading size (`text-xs`).
-const HEADING: f32 = 12.0;
-/// Search header height.
-const HEADER_H: f32 = 40.0;
-/// Magnifier edge.
-const SEARCH_ICON: f32 = 16.0;
-/// Horizontal padding inside the surface (`px-2`/`px-3`).
-const PAD_X: f32 = 10.0;
-/// Item row left/right padding.
-const ITEM_PAD_X: f32 = 8.0;
-/// Minimum item height (`min-h-8`).
-const ITEM_MIN_H: f32 = 36.0;
-/// Leading icon column width inside an item row (16px icon + 12px gap).
-const ICON_COL: f32 = 28.0;
-/// Max height of the scrolling list before it scrolls.
-const LIST_MAX_H: f32 = 300.0;
-/// Default surface width.
-const DEFAULT_WIDTH: f32 = 420.0;
+/// Overridable geometry for [`Command`] — reach in via [`Command::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct CommandMetrics {
+    /// Item / input text size (`text-sm`).
+    pub text: f32,
+    /// Group heading size (`text-xs`).
+    pub heading: f32,
+    /// Search header height.
+    pub header_h: f32,
+    /// Magnifier edge.
+    pub search_icon: f32,
+    /// Horizontal padding inside the surface (`px-2`/`px-3`).
+    pub pad_x: f32,
+    /// Item row left/right padding.
+    pub item_pad_x: f32,
+    /// Minimum item height (`min-h-8`).
+    pub item_min_h: f32,
+    /// Leading icon column width inside an item row (16px icon + 12px gap).
+    pub icon_col: f32,
+    /// Max height of the scrolling list before it scrolls.
+    pub list_max_h: f32,
+    /// Default surface width.
+    pub default_width: f32,
+}
+
+impl Default for CommandMetrics {
+    fn default() -> Self {
+        Self {
+            text: 14.0,
+            heading: 12.0,
+            header_h: 40.0,
+            search_icon: 16.0,
+            pad_x: 10.0,
+            item_pad_x: 8.0,
+            item_min_h: 36.0,
+            icon_col: 28.0,
+            list_max_h: 300.0,
+            default_width: 420.0,
+        }
+    }
+}
 
 /// One activatable command — a leading icon, a label, an optional shortcut.
 pub struct CommandItem {
@@ -177,6 +199,13 @@ pub struct Command {
     empty_text: String,
     width: Option<f32>,
     id_salt: egui::Id,
+    sizing_hook: SizingHook<CommandMetrics>,
+}
+
+impl Sizeable<CommandMetrics> for Command {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<CommandMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Command {
@@ -189,6 +218,7 @@ impl Command {
             empty_text: "No results found.".to_owned(),
             width: None,
             id_salt: egui::Id::new(("glazier-command", egui::Id::new(id_salt))),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -220,11 +250,12 @@ impl Command {
     /// Render the palette. Returns the id of the activated item, if any
     /// (Enter on the highlighted row, or a click).
     #[allow(clippy::too_many_lines)] // the search + nav + grouped body as one
-    pub fn show(self, ui: &mut Ui) -> Option<String> {
+    pub fn show(mut self, ui: &mut Ui) -> Option<String> {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let width = self
             .width
-            .unwrap_or(DEFAULT_WIDTH)
+            .unwrap_or(m.default_width)
             .min(ui.available_width());
 
         let filter_id = self.id_salt.with("filter");
@@ -250,6 +281,7 @@ impl Command {
                 &self.placeholder,
                 focus_id,
                 field_id,
+                m,
             );
 
             // ---- Capture the navigation keys while the field is focused. ----
@@ -347,7 +379,7 @@ impl Command {
 
             // ---- Body: grouped, scrollable item list. ----
             if n == 0 {
-                empty_row(ui, tokens, width, &self.empty_text);
+                empty_row(ui, tokens, width, &self.empty_text, m);
             } else {
                 // `scroll` is true only inside our own ScrollArea; when the
                 // list fits we render the rows directly and must NEVER call
@@ -360,14 +392,14 @@ impl Command {
                             continue;
                         }
                         if let Some(heading) = &group.heading {
-                            group_heading(ui, tokens, width, heading);
+                            group_heading(ui, tokens, width, heading, m);
                         }
                         for item in &group.items {
                             if !item.matches(&needle) {
                                 continue;
                             }
                             let active = flat == highlight;
-                            let resp = item_row(ui, tokens, width, item, active);
+                            let resp = item_row(ui, tokens, width, item, active, m);
                             if resp.clicked() {
                                 activated = Some(item.id.clone());
                             }
@@ -382,10 +414,10 @@ impl Command {
                 };
 
                 #[allow(clippy::cast_precision_loss)] // tiny item counts
-                let content_h = n as f32 * ITEM_MIN_H;
-                if content_h > LIST_MAX_H {
+                let content_h = n as f32 * m.item_min_h;
+                if content_h > m.list_max_h {
                     ScrollArea::new()
-                        .max_height(LIST_MAX_H)
+                        .max_height(m.list_max_h)
                         .show(ui, |ui| body(ui, true));
                 } else {
                     body(ui, false);
@@ -427,6 +459,7 @@ fn parse_shortcut(text: &str) -> Option<egui::KeyboardShortcut> {
 
 /// The borderless search header: a magnifier glyph and a frameless text field.
 /// Returns the field's [`egui::Response`] so the caller can read its focus.
+#[allow(clippy::too_many_arguments)]
 fn search_header(
     ui: &mut Ui,
     tokens: Tokens,
@@ -435,11 +468,12 @@ fn search_header(
     placeholder: &str,
     focus_id: egui::Id,
     field_id: egui::Id,
+    m: CommandMetrics,
 ) -> egui::Response {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, HEADER_H), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, m.header_h), Sense::hover());
     let icon_rect = egui::Rect::from_min_size(
-        egui::pos2(rect.left() + PAD_X, rect.center().y - SEARCH_ICON / 2.0),
-        Vec2::splat(SEARCH_ICON),
+        egui::pos2(rect.left() + m.pad_x, rect.center().y - m.search_icon / 2.0),
+        Vec2::splat(m.search_icon),
     );
     Icon::new(SEARCH)
         .color(tokens.muted_foreground)
@@ -448,7 +482,7 @@ fn search_header(
 
     let field_rect = egui::Rect::from_min_max(
         egui::pos2(icon_rect.right() + 8.0, rect.top()),
-        egui::pos2(rect.right() - PAD_X, rect.bottom()),
+        egui::pos2(rect.right() - m.pad_x, rect.bottom()),
     );
     let mut child = ui.new_child(
         egui::UiBuilder::new()
@@ -460,7 +494,7 @@ fn search_header(
         .frame(egui::Frame::NONE)
         .desired_width(field_rect.width())
         .hint_text(placeholder)
-        .font(egui::FontId::proportional(TEXT))
+        .font(egui::FontId::proportional(m.text))
         .margin(egui::Margin::ZERO)
         .show(&mut child);
 
@@ -485,13 +519,13 @@ fn divider(ui: &mut Ui, tokens: Tokens, width: f32) {
 }
 
 /// A muted group heading row (`text-xs`, `font-medium`).
-fn group_heading(ui: &mut Ui, tokens: Tokens, width: f32, text: &str) {
+fn group_heading(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, m: CommandMetrics) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::hover());
     ui.painter().text(
-        egui::pos2(rect.left() + ITEM_PAD_X, rect.center().y),
+        egui::pos2(rect.left() + m.item_pad_x, rect.center().y),
         egui::Align2::LEFT_CENTER,
         text,
-        egui::FontId::proportional(HEADING),
+        egui::FontId::proportional(m.heading),
         tokens.muted_foreground,
     );
 }
@@ -503,8 +537,9 @@ fn item_row(
     width: f32,
     item: &CommandItem,
     active: bool,
+    m: CommandMetrics,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ITEM_MIN_H), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.item_min_h), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let lit = active || response.hovered();
 
@@ -525,20 +560,20 @@ fn item_row(
         };
 
         // Leading icon.
-        let mut text_left = rect.left() + ITEM_PAD_X;
+        let mut text_left = rect.left() + m.item_pad_x;
         if let Some(icon) = item.icon {
             let icon_rect = egui::Rect::from_min_size(
                 egui::pos2(text_left, rect.center().y - 8.0),
                 Vec2::splat(16.0),
             );
             icon.color(text_color).image(tokens).paint_at(ui, icon_rect);
-            text_left += ICON_COL;
+            text_left += m.icon_col;
         }
 
         // Label.
         let galley = ui.painter().layout_no_wrap(
             item.label.clone(),
-            egui::FontId::proportional(TEXT),
+            egui::FontId::proportional(m.text),
             text_color,
         );
         ui.painter().galley(
@@ -554,8 +589,8 @@ fn item_row(
             // left clip bound (wide enough for multi-key hints like "Ctrl P").
             let chip_w = 96.0;
             let chip_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.right() - ITEM_PAD_X - chip_w, rect.top()),
-                egui::pos2(rect.right() - ITEM_PAD_X, rect.bottom()),
+                egui::pos2(rect.right() - m.item_pad_x - chip_w, rect.top()),
+                egui::pos2(rect.right() - m.item_pad_x, rect.bottom()),
             );
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
@@ -569,13 +604,13 @@ fn item_row(
 }
 
 /// The muted, centered "no results" row (shadcn's `CommandEmpty`).
-fn empty_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str) {
+fn empty_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, m: CommandMetrics) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 64.0), Sense::hover());
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         text,
-        egui::FontId::proportional(TEXT),
+        egui::FontId::proportional(m.text),
         tokens.muted_foreground,
     );
 }

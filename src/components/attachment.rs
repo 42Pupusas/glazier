@@ -314,7 +314,6 @@ impl Sizeable<AttachmentMetrics> for Attachment {
 }
 
 impl Attachment {
-
     /// The description to render: the explicit override, else `TYPE · SIZE`.
     fn resolved_description(&self) -> Option<String> {
         if let Some(d) = &self.description {

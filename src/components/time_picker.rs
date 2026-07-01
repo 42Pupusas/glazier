@@ -334,10 +334,12 @@ impl<'a> TimePicker<'a> {
             } else {
                 Stroke::new(1.0, tokens.input)
             };
+            // Opaque `card` surface — `background` is the app-canvas token
+            // and may be translucent under a user theme.
             ui.painter().rect(
                 rect,
                 tokens.radius_md(),
-                tokens.background,
+                tokens.card,
                 stroke,
                 StrokeKind::Inside,
             );

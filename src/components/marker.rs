@@ -167,7 +167,10 @@ impl Widget for Marker {
                     egui::pos2(cursor, rect.center().y - m.icon / 2.0),
                     Vec2::splat(m.icon),
                 );
-                icon.size(m.icon).color(color).image(tokens).paint_at(ui, ir);
+                icon.size(m.icon)
+                    .color(color)
+                    .image(tokens)
+                    .paint_at(ui, ir);
                 cursor += m.icon + m.icon_gap;
             }
 
@@ -199,7 +202,13 @@ impl Widget for Marker {
 
 /// Paint the [`Separator`](Variant::Separator) variant: a centred label with a
 /// hairline rule extending to each edge.
-fn separator(ui: &mut Ui, text: &str, color: Color32, tokens: Tokens, m: MarkerMetrics) -> Response {
+fn separator(
+    ui: &mut Ui,
+    text: &str,
+    color: Color32,
+    tokens: Tokens,
+    m: MarkerMetrics,
+) -> Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row_h), Sense::hover());
 

@@ -1,7 +1,7 @@
 //! [`Switch`] — a toggle, mirroring shadcn's `<Switch>`.
 //!
 //! A pill track that is `primary` when on and `input` when off, with a circular
-//! `background` thumb that slides between the ends. Borrows `&mut bool`.
+//! `card` thumb that slides between the ends. Borrows `&mut bool`.
 
 use egui::{Response, Sense, Ui, Vec2, Widget};
 
@@ -84,7 +84,10 @@ impl Widget for Switch<'_> {
             let travel = m.inset.mul_add(-2.0, rect.width() - m.thumb);
             let cx = rect.left() + m.inset + m.thumb / 2.0 + travel * t;
             let cy = rect.center().y;
-            painter.circle_filled(egui::pos2(cx, cy), m.thumb / 2.0, tokens.background);
+            // Opaque `card` fill — `background` is the app-canvas token and
+            // may be translucent under a user theme, which would make the
+            // thumb see-through against the track.
+            painter.circle_filled(egui::pos2(cx, cy), m.thumb / 2.0, tokens.card);
         }
 
         response

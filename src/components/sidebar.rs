@@ -84,7 +84,7 @@ pub struct SidebarResponse {
 }
 
 type SectionFn<'a> = Box<dyn FnOnce(&mut Ui, bool) + 'a>;
-type ExtraFn<'a>   = Box<dyn FnOnce(&mut Ui) + 'a>;
+type ExtraFn<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
 
 /// A collapsible application-shell sidebar.
 #[must_use = "sidebars do nothing unless you show them"]

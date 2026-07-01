@@ -154,7 +154,11 @@ impl Widget for Badge {
         };
         let mut style = BadgeStyle { fill, stroke, text };
         self.style_hook.apply(&mut style);
-        let BadgeStyle { fill, stroke, text: text_color } = style;
+        let BadgeStyle {
+            fill,
+            stroke,
+            text: text_color,
+        } = style;
         let m = crate::sizing::resolve(self.sizing_hook);
 
         // shadcn badge: text-xs (12px) font-medium, px-2 py-0.5.
@@ -183,14 +187,30 @@ impl Widget for Badge {
                 cursor += m.dot + m.dot_gap;
             }
             if let Some(icon) = self.icon_start {
-                paint_badge_icon(ui, icon, text_color, cursor, rect.center().y, tokens, m.icon);
+                paint_badge_icon(
+                    ui,
+                    icon,
+                    text_color,
+                    cursor,
+                    rect.center().y,
+                    tokens,
+                    m.icon,
+                );
                 cursor += m.icon + m.icon_gap;
             }
             let text_pos = egui::pos2(cursor, rect.center().y - galley.size().y / 2.0);
             ui.painter().galley(text_pos, galley, text_color);
             if let Some(icon) = self.icon_end {
                 let icon_x = rect.right() - padding.x - m.icon;
-                paint_badge_icon(ui, icon, text_color, icon_x, rect.center().y, tokens, m.icon);
+                paint_badge_icon(
+                    ui,
+                    icon,
+                    text_color,
+                    icon_x,
+                    rect.center().y,
+                    tokens,
+                    m.icon,
+                );
             }
         }
 
@@ -200,7 +220,15 @@ impl Widget for Badge {
 
 /// Paint a badge icon of edge length `size`, tinted to the badge's text
 /// colour, with its left edge at `x` and vertically centred on `cy`.
-fn paint_badge_icon(ui: &Ui, icon: Icon, tint: Color32, x: f32, cy: f32, tokens: Tokens, size: f32) {
+fn paint_badge_icon(
+    ui: &Ui,
+    icon: Icon,
+    tint: Color32,
+    x: f32,
+    cy: f32,
+    tokens: Tokens,
+    size: f32,
+) {
     let rect = egui::Rect::from_min_size(egui::pos2(x, cy - size / 2.0), Vec2::splat(size));
     icon.size(size).color(tint).image(tokens).paint_at(ui, rect);
 }

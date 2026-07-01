@@ -119,8 +119,11 @@ fn geometry(
     viewport: egui::Rect,
     tokens: Tokens,
 ) -> Geometry {
+    // Opaque `card` surface — `background` is the app-canvas token and may
+    // be translucent under a user theme, which would make every modal
+    // see-through against the dimmed backdrop.
     let base = Frame::new()
-        .fill(tokens.background)
+        .fill(tokens.card)
         .stroke(Stroke::new(1.0, tokens.border))
         .inner_margin(Margin::same(24)) // p-6
         .shadow(modal_shadow());

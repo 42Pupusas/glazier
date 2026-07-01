@@ -364,10 +364,12 @@ fn paint_cell(ui: &Ui, tokens: Tokens, rect: egui::Rect, ch: Option<char>, cell:
     } else {
         Stroke::new(1.0, tokens.input)
     };
+    // Opaque `card` surface — `background` is the app-canvas token and may
+    // be translucent under a user theme.
     ui.painter().rect(
         rect,
         tokens.radius_md(),
-        tokens.background,
+        tokens.card,
         stroke,
         StrokeKind::Inside,
     );
