@@ -75,10 +75,25 @@ way:
   `Tokens` directly, by design, so a page's chart always matches its theme).
   Left as-is; revisit only if a real need for overriding those surfaces shows up.
 
-Each migration was a ~10-line change: add `style_hook: StyleHook<T>` to the
-struct, `impl Customize<T>`, and one `style_hook.apply(&mut resolved)` right
-before painting (via `std::mem::take` where the paint path needed `&mut self`
-afterward, since `StyleHook::apply` takes `self` by value).
+Each migration was a ~10-line change: add a style_hook field to the struct, impl Customize<T>, and one style_hook.apply(&mut resolved) call right before painting (via std::mem::take where the paint path needed &mut self afterward, since StyleHook::apply takes self by value).
+
+---
+
+## Sizing audit (2026-07-01)
+
+Separate problem, same shape: components are full of small const f32/u8/usize values (row heights, paddings, gaps, icon sizes, animation durations) picked to match shadcn's Tailwind scale. They're sane defaults, not hard limits -- a caller with a denser layout or a different icon set has no way to reach them. ~200 such constants exist across ~49 component files.
+
+Adopted approach: Sizeable<T> (src/sizing.rs). Direct sibling of Customize<T>, same shape, for geometry instead of paint:
+
+1. Each metrics-heavy component gets one struct enumerating its own constants as public Copy fields (BadgeMetrics, SliderMetrics, CollapsibleMetrics, ...), with a Default impl reproducing the exact numbers that used to be hardcoded consts.
+2. One method, .sizing(FnOnce(&mut T)), hands the caller that struct after defaults are built and before layout runs.
+3. One free function, sizing::resolve(hook) -> T, is the component-side one-liner: build T::default(), apply the pending hook, hand back the resolved metrics to lay out with.
+
+Example: Badge::new("New").sizing(|m: &mut BadgeMetrics| m.icon_gap = 8.0).ui(ui);
+
+Reference implementations: Badge/BadgeMetrics (sizes + gaps, no timing), Slider/SliderMetrics (sizes + one animation duration + a u8 radius field), Collapsible/CollapsibleMetrics (a component whose consts were split between module-level and a const block inside show() -- unified into one struct). All three compile clean, clippy clean, and are exercised by src/sizing.rs's own doctest plus each component's existing doctest.
+
+Migration backlog (same shape, ~10-line change per component, do opportunistically): every other file listed in the constants sweep -- badge, slider, collapsible done; still open: date_picker, tabs, menubar, pagination, tooltip, button, alert, input_otp, hover_card, sidebar_menu, drawer, switch, spinner, checkbox, dropdown_menu, breadcrumb, alert_dialog, empty, carousel, sheet, select, message, navigation_menu, marker, time_picker, dialog, combobox, data_table, chart, bubble, command, radio_group, attachment, native_select, table, input_group, toggle_group, sonner, toggle, accordion, message_scroller, resizable, input, button_group, calendar, sidebar. SVG path-data constants (icon glyphs) are out of scope -- those aren't sizing, they're the icon itself.
 
 ---
 

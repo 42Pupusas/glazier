@@ -8,16 +8,32 @@ use egui::{Color32, Response, Sense, Stroke, StrokeKind, Ui, Vec2, Widget, Widge
 
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// A leading status dot diameter (shadcn `size-2`).
-const DOT: f32 = 8.0;
-/// Gap between the status dot and the label (`gap-1`).
-const DOT_GAP: f32 = 4.0;
-/// Inline icon edge length inside a badge (shadcn `size-3`).
-const ICON: f32 = 12.0;
-/// Gap between an inline icon and the label (`gap-1`).
-const ICON_GAP: f32 = 4.0;
+/// Overridable geometry for [`Badge`] — reach in via [`Badge::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct BadgeMetrics {
+    /// Leading status dot diameter (shadcn `size-2`).
+    pub dot: f32,
+    /// Gap between the status dot and the label (`gap-1`).
+    pub dot_gap: f32,
+    /// Inline icon edge length inside a badge (shadcn `size-3`).
+    pub icon: f32,
+    /// Gap between an inline icon and the label (`gap-1`).
+    pub icon_gap: f32,
+}
+
+impl Default for BadgeMetrics {
+    fn default() -> Self {
+        Self {
+            dot: 8.0,
+            dot_gap: 4.0,
+            icon: 12.0,
+            icon_gap: 4.0,
+        }
+    }
+}
 
 /// Visual style of a [`Badge`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,6 +81,7 @@ pub struct Badge {
     icon_start: Option<Icon>,
     icon_end: Option<Icon>,
     style_hook: StyleHook<BadgeStyle>,
+    sizing_hook: SizingHook<BadgeMetrics>,
 }
 
 impl Badge {
@@ -77,6 +94,7 @@ impl Badge {
             icon_start: None,
             icon_end: None,
             style_hook: StyleHook::default(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -111,6 +129,12 @@ impl Customize<BadgeStyle> for Badge {
     }
 }
 
+impl Sizeable<BadgeMetrics> for Badge {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<BadgeMetrics> {
+        &mut self.sizing_hook
+    }
+}
+
 impl Widget for Badge {
     fn ui(self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
@@ -131,12 +155,13 @@ impl Widget for Badge {
         let mut style = BadgeStyle { fill, stroke, text };
         self.style_hook.apply(&mut style);
         let BadgeStyle { fill, stroke, text: text_color } = style;
+        let m = crate::sizing::resolve(self.sizing_hook);
 
         // shadcn badge: text-xs (12px) font-medium, px-2 py-0.5.
         let padding = Vec2::new(8.0, 3.0);
-        let lead = self.dot.map_or(0.0, |_| DOT + DOT_GAP)
-            + self.icon_start.map_or(0.0, |_| ICON + ICON_GAP);
-        let trail = self.icon_end.map_or(0.0, |_| ICON + ICON_GAP);
+        let lead = self.dot.map_or(0.0, |_| m.dot + m.dot_gap)
+            + self.icon_start.map_or(0.0, |_| m.icon + m.icon_gap);
+        let trail = self.icon_end.map_or(0.0, |_| m.icon + m.icon_gap);
         let galley = self.text.color(text_color).into_galley(
             ui,
             Some(egui::TextWrapMode::Extend),
@@ -153,19 +178,19 @@ impl Widget for Badge {
                 .rect(rect, radius, fill, stroke, StrokeKind::Inside);
             let mut cursor = rect.left() + padding.x;
             if let Some(dot) = self.dot {
-                let center = egui::pos2(cursor + DOT / 2.0, rect.center().y);
-                ui.painter().circle_filled(center, DOT / 2.0, dot);
-                cursor += DOT + DOT_GAP;
+                let center = egui::pos2(cursor + m.dot / 2.0, rect.center().y);
+                ui.painter().circle_filled(center, m.dot / 2.0, dot);
+                cursor += m.dot + m.dot_gap;
             }
             if let Some(icon) = self.icon_start {
-                paint_badge_icon(ui, icon, text_color, cursor, rect.center().y, tokens);
-                cursor += ICON + ICON_GAP;
+                paint_badge_icon(ui, icon, text_color, cursor, rect.center().y, tokens, m.icon);
+                cursor += m.icon + m.icon_gap;
             }
             let text_pos = egui::pos2(cursor, rect.center().y - galley.size().y / 2.0);
             ui.painter().galley(text_pos, galley, text_color);
             if let Some(icon) = self.icon_end {
-                let icon_x = rect.right() - padding.x - ICON;
-                paint_badge_icon(ui, icon, text_color, icon_x, rect.center().y, tokens);
+                let icon_x = rect.right() - padding.x - m.icon;
+                paint_badge_icon(ui, icon, text_color, icon_x, rect.center().y, tokens, m.icon);
             }
         }
 
@@ -173,9 +198,9 @@ impl Widget for Badge {
     }
 }
 
-/// Paint a `size-3` badge icon, tinted to the badge's text colour, with its
-/// left edge at `x` and vertically centred on `cy`.
-fn paint_badge_icon(ui: &Ui, icon: Icon, tint: Color32, x: f32, cy: f32, tokens: Tokens) {
-    let rect = egui::Rect::from_min_size(egui::pos2(x, cy - ICON / 2.0), Vec2::splat(ICON));
-    icon.size(ICON).color(tint).image(tokens).paint_at(ui, rect);
+/// Paint a badge icon of edge length `size`, tinted to the badge's text
+/// colour, with its left edge at `x` and vertically centred on `cy`.
+fn paint_badge_icon(ui: &Ui, icon: Icon, tint: Color32, x: f32, cy: f32, tokens: Tokens, size: f32) {
+    let rect = egui::Rect::from_min_size(egui::pos2(x, cy - size / 2.0), Vec2::splat(size));
+    icon.size(size).color(tint).image(tokens).paint_at(ui, rect);
 }

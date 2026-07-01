@@ -9,13 +9,38 @@
 use egui::{collapsing_header::CollapsingState, Response, Sense, Ui, Vec2, Widget};
 
 use crate::icon::Icon as GlazierIcon;
-
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Trigger row height (`h-9`-ish), horizontal padding, and the chevron glyph box.
-const TRIGGER_H: f32 = 36.0;
-const X_PAD: f32 = 8.0;
-const CHEVRON: f32 = 16.0;
+/// Overridable geometry for [`Collapsible`] — reach in via [`Collapsible::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct CollapsibleMetrics {
+    /// Trigger row height (`h-9`-ish).
+    pub trigger_h: f32,
+    /// Horizontal inset for the label and chevron.
+    pub x_pad: f32,
+    /// Chevron glyph box edge length.
+    pub chevron: f32,
+    /// Leading icon edge length.
+    pub icon_size: f32,
+    /// Gap between the leading icon and the label.
+    pub icon_gap: f32,
+    /// Seconds for the trigger hover-fade transition.
+    pub hover_time: f32,
+}
+
+impl Default for CollapsibleMetrics {
+    fn default() -> Self {
+        Self {
+            trigger_h: 36.0,
+            x_pad: 8.0,
+            chevron: 16.0,
+            icon_size: 14.0,
+            icon_gap: 6.0,
+            hover_time: 0.15,
+        }
+    }
+}
 
 /// A single collapsible section.
 ///
@@ -35,6 +60,7 @@ pub struct Collapsible {
     title: String,
     icon: Option<GlazierIcon>,
     default_open: bool,
+    sizing_hook: SizingHook<CollapsibleMetrics>,
 }
 
 impl Collapsible {
@@ -51,6 +77,7 @@ impl Collapsible {
             title: String::new(),
             icon: None,
             default_open: false,
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -88,13 +115,18 @@ impl Collapsible {
         self.default_open = open;
         self
     }
+}
 
+impl Sizeable<CollapsibleMetrics> for Collapsible {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<CollapsibleMetrics> {
+        &mut self.sizing_hook
+    }
+}
+
+impl Collapsible {
     /// Render the trigger and, when open, the `body` beneath it.
     pub fn show<R>(self, ui: &mut Ui, body: impl FnOnce(&mut Ui) -> R) -> Response {
-        // Icon geometry for the optional leading icon (used further below).
-        const ICON_SIZE: f32 = 14.0;
-        const ICON_GAP: f32 = 6.0;
-
+        let m = crate::sizing::resolve(self.sizing_hook);
         let tokens = Tokens::get(ui);
         // Use the raw id (not `ui.make_persistent_id`) so the key is stable
         // and readable from outside via `Collapsible::openness` / `is_open`.
@@ -108,7 +140,7 @@ impl Collapsible {
         // CollapsingState. An auto-id from `allocate_*` drifts when the widget
         // count before it changes (e.g. in the masonry `columns` layout), which
         // silently dropped clicks.
-        let (_, rect) = ui.allocate_space(Vec2::new(ui.available_width(), TRIGGER_H));
+        let (_, rect) = ui.allocate_space(Vec2::new(ui.available_width(), m.trigger_h));
         let mut header = ui.interact(rect, id, Sense::click());
         if header.clicked() {
             state.toggle(ui);
@@ -116,34 +148,36 @@ impl Collapsible {
         }
 
         if ui.is_rect_visible(rect) {
-            let hover_t =
-                ui.ctx()
-                    .animate_bool_with_time(header.id.with("hover"), header.hovered(), 0.15);
+            let hover_t = ui.ctx().animate_bool_with_time(
+                header.id.with("hover"),
+                header.hovered(),
+                m.hover_time,
+            );
             let text_col = tokens
                 .foreground
                 .gamma_multiply(0.9)
                 .lerp_to_gamma(tokens.foreground, hover_t);
             let painter = ui.painter();
 
-            // Optional icon + label (semibold, left-aligned, inset by X_PAD).
-            let mut text_x = rect.left() + X_PAD;
+            // Optional icon + label (semibold, left-aligned, inset by x_pad).
+            let mut text_x = rect.left() + m.x_pad;
             if let Some(icon) = self.icon {
                 let icon_rect = egui::Rect::from_min_size(
-                    egui::pos2(text_x, rect.center().y - ICON_SIZE / 2.0),
-                    egui::Vec2::splat(ICON_SIZE),
+                    egui::pos2(text_x, rect.center().y - m.icon_size / 2.0),
+                    egui::Vec2::splat(m.icon_size),
                 );
                 // Paint the icon directly into the allocated rect.
                 icon.color(text_col).image(tokens).paint_at(ui, icon_rect);
-                text_x += ICON_SIZE + ICON_GAP;
+                text_x += m.icon_size + m.icon_gap;
             }
             let galley =
                 painter.layout_no_wrap(self.title, crate::fonts::semibold(ui, 14.0), text_col);
             let ty = rect.center().y - galley.size().y / 2.0;
             painter.galley(egui::pos2(text_x, ty), galley, text_col);
 
-            // Chevron at the inline-end, inset by X_PAD, rotated by openness.
-            let center = egui::pos2(rect.right() - CHEVRON / 2.0 - X_PAD, rect.center().y);
-            paint_chevron(painter, center, openness, text_col);
+            // Chevron at the inline-end, inset by x_pad, rotated by openness.
+            let center = egui::pos2(rect.right() - m.chevron / 2.0 - m.x_pad, rect.center().y);
+            paint_chevron(painter, center, openness, text_col, m.chevron);
         }
 
         // --- Body: animated height-clipped reveal (CollapsingState handles it).
@@ -157,12 +191,18 @@ impl Collapsible {
     }
 }
 
-/// Paint a chevron centred on `center`, interpolating from down (`openness` 0)
-/// to up (`openness` 1) — a 180° flip, matching shadcn's
-/// `[&[data-state=open]>svg]:rotate-180`.
-fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, openness: f32, color: egui::Color32) {
+/// Paint a chevron of edge length `size`, centred on `center`, interpolating
+/// from down (`openness` 0) to up (`openness` 1) — a 180° flip, matching
+/// shadcn's `[&[data-state=open]>svg]:rotate-180`.
+fn paint_chevron(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    openness: f32,
+    color: egui::Color32,
+    size: f32,
+) {
     // A downward chevron: two arms from a top-left/top-right down to the tip.
-    let half = CHEVRON * 0.28;
+    let half = size * 0.28;
     // Flip vertically as it opens: lerp the arm/tip y-offsets through zero.
     let dy = 2.0f32.mul_add(-openness, 1.0) * half * 0.6;
     let tip = egui::pos2(center.x, center.y + dy);
