@@ -37,6 +37,7 @@ use crate::components::calendar::{Calendar, Date};
 use crate::components::icon::Icon;
 use crate::components::input::Input;
 use crate::components::popover::Popover;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// `calendar` (lucide) — the leading affordance.
@@ -58,20 +59,42 @@ const MONTHS: [&str; 12] = [
     "December",
 ];
 
-/// Trigger horizontal / vertical padding (`px-3 py-2`, shadcn outline button).
-const PAD_X: f32 = 12.0;
-const PAD_Y: f32 = 8.0;
-/// Leading icon edge (`size-4`) and its gap to the label.
-const ICON_SIZE: f32 = 16.0;
-const ICON_GAP: f32 = 8.0;
-/// Trigger text size (`text-sm`).
-const TEXT: f32 = 13.0;
-/// Hover transition (shadcn `transition-colors`).
-const HOVER_TIME: f32 = 0.15;
-/// Square edge of the trailing icon-button in input mode (`size-9`).
-const ICON_BUTTON: f32 = 36.0;
-/// Gap between the input field and its trailing icon-button.
-const INPUT_GAP: f32 = 8.0;
+/// Overridable geometry/timing for [`DatePicker`] — reach in via
+/// [`DatePicker::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct DatePickerMetrics {
+    /// Trigger horizontal padding (`px-3`, shadcn outline button).
+    pub pad_x: f32,
+    /// Trigger vertical padding (`py-2`).
+    pub pad_y: f32,
+    /// Leading icon edge (`size-4`).
+    pub icon_size: f32,
+    /// Gap between the leading icon and the label.
+    pub icon_gap: f32,
+    /// Trigger text size (`text-sm`).
+    pub text: f32,
+    /// Hover transition duration (shadcn `transition-colors`).
+    pub hover_time: f32,
+    /// Square edge of the trailing icon-button in input mode (`size-9`).
+    pub icon_button: f32,
+    /// Gap between the input field and its trailing icon-button.
+    pub input_gap: f32,
+}
+
+impl Default for DatePickerMetrics {
+    fn default() -> Self {
+        Self {
+            pad_x: 12.0,
+            pad_y: 8.0,
+            icon_size: 16.0,
+            icon_gap: 8.0,
+            text: 13.0,
+            hover_time: 0.15,
+            icon_button: 36.0,
+            input_gap: 8.0,
+        }
+    }
+}
 
 /// A date picker: an outline trigger that opens a [`Calendar`] popover.
 #[must_use = "date pickers do nothing unless you show them"]
@@ -82,6 +105,13 @@ pub struct DatePicker<'a> {
     placeholder: String,
     width: Option<f32>,
     id_salt: egui::Id,
+    sizing_hook: SizingHook<DatePickerMetrics>,
+}
+
+impl Sizeable<DatePickerMetrics> for DatePicker<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<DatePickerMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> DatePicker<'a> {
@@ -94,6 +124,7 @@ impl<'a> DatePicker<'a> {
             placeholder: "Pick a date".to_owned(),
             width: None,
             id_salt: egui::Id::new("glazier-date-picker"),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -132,8 +163,9 @@ impl<'a> DatePicker<'a> {
     }
 
     /// Render the picker. Returns `true` if the selection changed this frame.
-    pub fn show(self, ui: &mut Ui) -> bool {
+    pub fn show(mut self, ui: &mut Ui) -> bool {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let today = self.today;
         let id_salt = self.id_salt;
         let placeholder = self.placeholder;
@@ -146,9 +178,9 @@ impl<'a> DatePicker<'a> {
         // Two layouts share one popover: a button-style trigger (default) or a
         // typeable field + trailing icon-button (the "with input" variant).
         let trigger = if let Some(buf) = buffer.as_deref_mut() {
-            input_trigger(ui, tokens, selected, buf, &placeholder, width, &mut changed)
+            input_trigger(ui, tokens, selected, buf, &placeholder, width, &mut changed, m)
         } else {
-            button_trigger(ui, tokens, *selected, &placeholder, width)
+            button_trigger(ui, tokens, *selected, &placeholder, width, m)
         };
 
         // Calendar popover. The calendar is interactive (its prev/next arrows
@@ -184,12 +216,13 @@ fn button_trigger(
     selected: Option<Date>,
     placeholder: &str,
     width: Option<f32>,
+    m: DatePickerMetrics,
 ) -> Response {
     let has_date = selected.is_some();
     let label = selected.map_or_else(|| placeholder.to_owned(), format_date);
 
     let width = width.unwrap_or_else(|| ui.available_width());
-    let height = 2.0_f32.mul_add(PAD_Y, TEXT.max(ICON_SIZE)).max(36.0);
+    let height = 2.0_f32.mul_add(m.pad_y, m.text.max(m.icon_size)).max(36.0);
     let (rect, trigger) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     let trigger = trigger.on_hover_cursor(egui::CursorIcon::PointingHand);
 
@@ -198,7 +231,7 @@ fn button_trigger(
         let hover_t = ui.ctx().animate_bool_with_time(
             trigger.id.with("hover"),
             trigger.hovered(),
-            HOVER_TIME,
+            m.hover_time,
         );
         let fill = tokens.background.lerp_to_gamma(tokens.accent, hover_t);
         ui.painter().rect(
@@ -211,8 +244,8 @@ fn button_trigger(
 
         // Leading calendar icon, muted like shadcn's `text-muted-foreground`.
         let icon_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + PAD_X, rect.center().y - ICON_SIZE / 2.0),
-            Vec2::splat(ICON_SIZE),
+            egui::pos2(rect.left() + m.pad_x, rect.center().y - m.icon_size / 2.0),
+            Vec2::splat(m.icon_size),
         );
         Icon::new(CALENDAR)
             .color(tokens.muted_foreground)
@@ -227,9 +260,9 @@ fn button_trigger(
         };
         let galley = ui
             .painter()
-            .layout_no_wrap(label, egui::FontId::proportional(TEXT), color);
+            .layout_no_wrap(label, egui::FontId::proportional(m.text), color);
         let pos = egui::pos2(
-            icon_rect.right() + ICON_GAP,
+            icon_rect.right() + m.icon_gap,
             rect.center().y - galley.size().y / 2.0,
         );
         ui.painter().galley(pos, galley, color);
@@ -241,6 +274,7 @@ fn button_trigger(
 /// Render the *with input* trigger: a typeable field plus a trailing calendar
 /// icon-button. Parses the field on change (updating `selected`/`changed`) and
 /// returns the icon-button's click [`Response`] for the popover to anchor to.
+#[allow(clippy::too_many_arguments)]
 fn input_trigger(
     ui: &mut Ui,
     tokens: Tokens,
@@ -249,13 +283,14 @@ fn input_trigger(
     placeholder: &str,
     width: Option<f32>,
     changed: &mut bool,
+    m: DatePickerMetrics,
 ) -> Response {
     let total = width.unwrap_or_else(|| ui.available_width());
-    let field_w = (total - ICON_BUTTON - INPUT_GAP).max(0.0);
+    let field_w = (total - m.icon_button - m.input_gap).max(0.0);
 
     let mut trigger = None;
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = INPUT_GAP;
+        ui.spacing_mut().item_spacing.x = m.input_gap;
 
         // The text field: typing a recognised date updates the selection.
         let resp = Input::new(buffer)
@@ -274,21 +309,21 @@ fn input_trigger(
             }
         }
 
-        trigger = Some(icon_button(ui, tokens));
+        trigger = Some(icon_button(ui, tokens, m));
     });
 
     trigger.expect("horizontal layout always runs its closure")
 }
 
 /// A square outline icon-button bearing the calendar glyph.
-fn icon_button(ui: &mut Ui, tokens: Tokens) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(ICON_BUTTON), Sense::click());
+fn icon_button(ui: &mut Ui, tokens: Tokens, m: DatePickerMetrics) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(m.icon_button), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     if ui.is_rect_visible(rect) {
         let hover_t =
             ui.ctx()
-                .animate_bool_with_time(resp.id.with("hover"), resp.hovered(), HOVER_TIME);
+                .animate_bool_with_time(resp.id.with("hover"), resp.hovered(), m.hover_time);
         let fill = tokens.background.lerp_to_gamma(tokens.accent, hover_t);
         ui.painter().rect(
             rect,
@@ -297,7 +332,7 @@ fn icon_button(ui: &mut Ui, tokens: Tokens) -> Response {
             Stroke::new(1.0, tokens.border),
             StrokeKind::Inside,
         );
-        let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(ICON_SIZE));
+        let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(m.icon_size));
         Icon::new(CALENDAR)
             .color(tokens.foreground)
             .image(tokens)

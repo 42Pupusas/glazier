@@ -32,16 +32,33 @@ use std::fmt;
 
 use egui::{Event, Key, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Field height (`h-9`).
-const HEIGHT: f32 = 36.0;
-/// Horizontal padding inside the field (`px-3`).
-const PAD_X: f32 = 12.0;
-/// Section / separator text size (`text-sm`).
-const TEXT: f32 = 13.0;
-/// Extra width padding around each focusable section's highlight chip.
-const CHIP_PAD_X: f32 = 3.0;
+/// Overridable geometry for [`TimePicker`] — reach in via
+/// [`TimePicker::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct TimePickerMetrics {
+    /// Field height (`h-9`).
+    pub height: f32,
+    /// Horizontal padding inside the field (`px-3`).
+    pub pad_x: f32,
+    /// Section / separator text size (`text-sm`).
+    pub text: f32,
+    /// Extra width padding around each focusable section's highlight chip.
+    pub chip_pad_x: f32,
+}
+
+impl Default for TimePickerMetrics {
+    fn default() -> Self {
+        Self {
+            height: 36.0,
+            pad_x: 12.0,
+            text: 13.0,
+            chip_pad_x: 3.0,
+        }
+    }
+}
 
 /// The four editable sections, left to right.
 const SEG_HOUR: u8 = 0;
@@ -136,6 +153,13 @@ pub struct TimePicker<'a> {
     time: &'a mut Time,
     width: Option<f32>,
     id_salt: egui::Id,
+    sizing_hook: SizingHook<TimePickerMetrics>,
+}
+
+impl Sizeable<TimePickerMetrics> for TimePicker<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<TimePickerMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> TimePicker<'a> {
@@ -145,6 +169,7 @@ impl<'a> TimePicker<'a> {
             time,
             width: None,
             id_salt: egui::Id::new("glazier-time-picker"),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -162,12 +187,14 @@ impl<'a> TimePicker<'a> {
 
     /// Render the picker. Returns `true` if the time changed this frame.
     #[allow(clippy::too_many_lines)]
-    pub fn show(self, ui: &mut Ui) -> bool {
+    pub fn show(mut self, ui: &mut Ui) -> bool {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let width = self.width.unwrap_or_else(|| ui.available_width());
         let id = ui.make_persistent_id(self.id_salt);
 
-        let (rect, mut response) = ui.allocate_exact_size(Vec2::new(width, HEIGHT), Sense::click());
+        let (rect, mut response) =
+            ui.allocate_exact_size(Vec2::new(width, m.height), Sense::click());
         let focused = response.has_focus();
 
         // Claim the arrow keys so egui's focus navigation doesn't steal them:
@@ -204,7 +231,7 @@ impl<'a> TimePicker<'a> {
                 "AM".to_owned()
             },
         ];
-        let font = egui::FontId::proportional(TEXT);
+        let font = egui::FontId::proportional(m.text);
         let measure = |ui: &Ui, s: &str| {
             ui.painter()
                 .layout_no_wrap(s.to_owned(), font.clone(), tokens.foreground)
@@ -221,12 +248,12 @@ impl<'a> TimePicker<'a> {
 
         // Lay sections out left to right with ":" separators and a space before
         // the meridiem. Records each section's hit rect.
-        let mut x = rect.left() + PAD_X;
+        let mut x = rect.left() + m.pad_x;
         let cy = rect.center().y;
         let mut seg_rects = [Rect::NOTHING; 4];
         for i in 0..4 {
             let w = seg_w[i];
-            seg_rects[i] = Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(w, HEIGHT));
+            seg_rects[i] = Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(w, m.height));
             x += w;
             // Separators: ":" between numbers, a space before the meridiem.
             if i == SEG_HOUR as usize || i == SEG_MIN as usize {
@@ -321,8 +348,8 @@ impl<'a> TimePicker<'a> {
                 let active = response.has_focus() && state.seg as usize == i;
                 let color = if active {
                     let chip = Rect::from_min_max(
-                        egui::pos2(sr.left() - CHIP_PAD_X, TEXT.mul_add(-0.75, cy)),
-                        egui::pos2(sr.right() + CHIP_PAD_X, TEXT.mul_add(0.75, cy)),
+                        egui::pos2(sr.left() - m.chip_pad_x, m.text.mul_add(-0.75, cy)),
+                        egui::pos2(sr.right() + m.chip_pad_x, m.text.mul_add(0.75, cy)),
                     );
                     ui.painter().rect_filled(chip, 4.0, sel.bg_fill);
                     sel.stroke.color

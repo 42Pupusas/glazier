@@ -49,16 +49,16 @@ pub use components::{
     BreadcrumbMetrics, Bubble, BubbleGroup, Button, ButtonGroup, ButtonGroupMetrics, ButtonStyle,
     Calendar, CalendarMetrics, Card, Carousel, CarouselMetrics, Chart, Checkbox, CheckboxMetrics, Collapsible, CollapsibleMetrics,
     Combobox, Command, CommandGroup, CommandItem, ContextMenu, DataColumn, DataTable,
-    DataTableMetrics, Date, DatePicker, Dialog, Drawer, DrawerMetrics, DropdownMenu, Empty, EmptyMetrics, Field, Grid, HoverCard,
+    DataTableMetrics, Date, DatePicker, DatePickerMetrics, Dialog, Drawer, DrawerMetrics, DropdownMenu, Empty, EmptyMetrics, Field, Grid, HoverCard,
     Icon, Input, InputGroup, InputGroupMetrics, InputMetrics, InputOtp, Item, Kbd, Label, Marker,
     MarkerMetrics, MarkerStyle, Menubar, MenubarMenu, Message, MessageGroup, MessageResponse,
     MessageScroller, MessageScrollerMetrics, NativeSelect, NavItem, NavResponse, NavigationMenu,
     OtpMode, Pagination, PaginationMetrics, Popover, Progress, RadioGroup, RadioGroupMetrics, Resizable,
     ResizableMetrics, ScrollArea, Select, Separator, Sheet, Sidebar, SidebarMenu, SidebarTrigger,
     Sizing, Skeleton, Slider, SliderMetrics, Spinner, SpinnerMetrics, SpinnerStyle, Switch,
-    SwitchMetrics, Table, TableMetrics, Tabs, TabsResponse, Textarea, Time, TimePicker, Toast,
-    Toaster, Toggle, ToggleGroup, ToggleGroupMetrics, ToggleMetrics, Tooltip, TooltipMetrics,
-    Typography, TypographyMetrics,
+    SwitchMetrics, Table, TableMetrics, Tabs, TabsResponse, Textarea, Time, TimePicker,
+    TimePickerMetrics, Toast, Toaster, Toggle, ToggleGroup, ToggleGroupMetrics, ToggleMetrics,
+    Tooltip, TooltipMetrics, Typography, TypographyMetrics,
 };
 pub use customize::{Customize, StyleHook};
 pub use decorate::{Decorate, Styled};
