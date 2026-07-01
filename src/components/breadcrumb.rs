@@ -128,9 +128,9 @@ impl Breadcrumb {
         // Each separator is its own allocated widget; with item_spacing.x=GAP
         // egui inserts GAP between every adjacent pair of widgets.
         // Total widgets = n crumbs + (n-1) separators → (2n-2) gaps.
-        let natural_w = crumb_w
-            + (n.saturating_sub(1) as f32) * SEP
-            + (2 * n.saturating_sub(1)) as f32 * GAP;
+        #[allow(clippy::cast_precision_loss)] // n is a crumb count, always tiny
+        let n_f = n.saturating_sub(1) as f32;
+        let natural_w = (2.0 * n_f).mul_add(GAP, n_f.mul_add(SEP, crumb_w));
 
         let resp = ui.allocate_ui_with_layout(
             egui::vec2(natural_w, ROW_H),

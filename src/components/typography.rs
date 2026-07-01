@@ -57,6 +57,7 @@ pub enum Variant {
 
 impl Variant {
     /// Font size in points for this style (shadcn's Tailwind text-* scale).
+    #[must_use]
     pub const fn size(self) -> f32 {
         match self {
             Self::H1 => 36.0,

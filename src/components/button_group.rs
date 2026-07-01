@@ -150,6 +150,7 @@ impl ButtonGroup {
 
     /// Render the group, returning which segment was clicked and which dropdown
     /// item (if any) was picked.
+    #[allow(clippy::too_many_lines)] // one linear layout-then-paint pass; splitting it obscures the single measure->draw flow
     pub fn show(self, ui: &mut Ui) -> ButtonGroupResponse {
         let tokens = Tokens::get(ui);
         let n = self.labels.len();
@@ -297,6 +298,7 @@ fn segment_paint(
 }
 
 /// Centre a segment's optional leading icon + label + optional trailing icon.
+#[allow(clippy::too_many_arguments)] // private helper, one call site, each param is a distinct paint input
 fn paint_segment_content(
     ui: &Ui,
     painter: &egui::Painter,

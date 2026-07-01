@@ -33,6 +33,7 @@ const H_COMPACT: f32 = 28.0;
 /// # });
 /// ```
 #[must_use = "inputs do nothing unless you add them to a Ui"]
+#[allow(clippy::struct_excessive_bools)] // each is an independent, orthogonal input mode
 pub struct Input<'a> {
     text: &'a mut String,
     placeholder: Option<String>,
@@ -73,7 +74,7 @@ impl<'a> Input<'a> {
     /// Prefix the input with a leading icon, inset into the left side of the
     /// field. The text is shifted right to make room; the icon is painted in
     /// `muted_foreground` so it reads as a hint, not an action.
-    pub fn icon_start(mut self, icon: crate::icon::Icon) -> Self {
+    pub const fn icon_start(mut self, icon: crate::icon::Icon) -> Self {
         self.icon_start = Some(icon);
         self
     }

@@ -168,6 +168,7 @@ impl<'a> Sidebar<'a> {
 
     /// Render the sidebar; `body` fills the scrollable middle (receives
     /// `collapsed`).
+    #[allow(clippy::too_many_lines)] // one linear header/body/footer paint pass; splitting fragments the shared collapse state
     pub fn show(self, ui: &mut Ui, body: impl FnOnce(&mut Ui, bool)) -> SidebarResponse {
         let tokens = Tokens::get(ui);
         let id = state_id(&self.id_salt);

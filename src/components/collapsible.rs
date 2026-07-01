@@ -78,7 +78,7 @@ impl Collapsible {
     }
 
     /// Show a small icon to the left of the trigger label.
-    pub fn icon(mut self, icon: GlazierIcon) -> Self {
+    pub const fn icon(mut self, icon: GlazierIcon) -> Self {
         self.icon = Some(icon);
         self
     }
@@ -91,6 +91,10 @@ impl Collapsible {
 
     /// Render the trigger and, when open, the `body` beneath it.
     pub fn show<R>(self, ui: &mut Ui, body: impl FnOnce(&mut Ui) -> R) -> Response {
+        // Icon geometry for the optional leading icon (used further below).
+        const ICON_SIZE: f32 = 14.0;
+        const ICON_GAP: f32 = 6.0;
+
         let tokens = Tokens::get(ui);
         // Use the raw id (not `ui.make_persistent_id`) so the key is stable
         // and readable from outside via `Collapsible::openness` / `is_open`.
@@ -122,8 +126,6 @@ impl Collapsible {
             let painter = ui.painter();
 
             // Optional icon + label (semibold, left-aligned, inset by X_PAD).
-            const ICON_SIZE: f32 = 14.0;
-            const ICON_GAP: f32 = 6.0;
             let mut text_x = rect.left() + X_PAD;
             if let Some(icon) = self.icon {
                 let icon_rect = egui::Rect::from_min_size(
