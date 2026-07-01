@@ -34,16 +34,33 @@ use std::hash::{Hash, Hasher};
 use egui::{Align, Response, Sense, Ui, Vec2};
 
 use crate::components::scroll_area::style_scrollbar;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Default peek of the previous row kept above a newly anchored turn (px).
-const DEFAULT_PEEK: f32 = 64.0;
-/// Jump-to-latest button diameter (shadcn `size-8`).
-const BUTTON: f32 = 32.0;
-/// Inset of the floating button from the viewport's bottom-right corner.
-const BUTTON_INSET: f32 = 12.0;
-/// Slack (px) within which the viewport counts as "at the live edge".
-const EDGE_SLACK: f32 = 4.0;
+/// Overridable geometry for [`MessageScroller`] — reach in via
+/// [`MessageScroller::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct MessageScrollerMetrics {
+    /// Default peek of the previous row kept above a newly anchored turn (px).
+    pub default_peek: f32,
+    /// Jump-to-latest button diameter (shadcn `size-8`).
+    pub button: f32,
+    /// Inset of the floating button from the viewport's bottom-right corner.
+    pub button_inset: f32,
+    /// Slack (px) within which the viewport counts as "at the live edge".
+    pub edge_slack: f32,
+}
+
+impl Default for MessageScrollerMetrics {
+    fn default() -> Self {
+        Self {
+            default_peek: 64.0,
+            button: 32.0,
+            button_inset: 12.0,
+            edge_slack: 4.0,
+        }
+    }
+}
 
 /// Where a freshly-shown transcript should open, mirroring shadcn's
 /// `defaultScrollPosition`.
@@ -132,6 +149,13 @@ pub struct MessageScroller<'a> {
     scroll_by: f32,
     content_right_pad: f32,
     items: Vec<Item<'a>>,
+    sizing_hook: SizingHook<MessageScrollerMetrics>,
+}
+
+impl Sizeable<MessageScrollerMetrics> for MessageScroller<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<MessageScrollerMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> MessageScroller<'a> {
@@ -141,13 +165,14 @@ impl<'a> MessageScroller<'a> {
         Self {
             id_source: egui::Id::new(id_source),
             auto_scroll: false,
-            peek: DEFAULT_PEEK,
+            peek: MessageScrollerMetrics::default().default_peek,
             default_position: Position::default(),
             button: true,
             max_height: None,
             scroll_by: 0.0,
             content_right_pad: 0.0,
             items: Vec::new(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -228,8 +253,9 @@ impl<'a> MessageScroller<'a> {
     }
 
     /// Render the transcript.
-    pub fn show(self, ui: &mut Ui) -> Response {
+    pub fn show(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let id = ui.make_persistent_id(self.id_source);
         let mut state: ScrollerState = ui.ctx().data_mut(|d| d.get_temp(id)).unwrap_or_default();
 
@@ -279,7 +305,7 @@ impl<'a> MessageScroller<'a> {
         let content_h = out.content_size.y;
         let offset_y = out.state.offset.y;
         let can_scroll = content_h > viewport_h + 1.0;
-        let at_bottom = offset_y + viewport_h >= content_h - EDGE_SLACK;
+        let at_bottom = offset_y + viewport_h >= content_h - m.edge_slack;
 
         // Older rows were prepended: nudge the offset by the height that grew
         // above the fold so the visible row stays put.
@@ -295,7 +321,7 @@ impl<'a> MessageScroller<'a> {
 
         // Floating jump-to-latest button: shown only when the reader has left
         // the live edge and there is somewhere below to go.
-        if show_button && can_scroll && !at_bottom && jump_button(ui, id, out.inner_rect, tokens) {
+        if show_button && can_scroll && !at_bottom && jump_button(ui, id, out.inner_rect, tokens, m) {
             state.pending = Pending::End;
             ui.ctx().request_repaint();
         }
@@ -421,12 +447,18 @@ fn apply_action(
 
 /// Paint the floating jump-to-latest button in the viewport's bottom-right
 /// corner. Returns `true` if it was clicked this frame.
-fn jump_button(ui: &Ui, id: egui::Id, viewport: egui::Rect, tokens: Tokens) -> bool {
+fn jump_button(
+    ui: &Ui,
+    id: egui::Id,
+    viewport: egui::Rect,
+    tokens: Tokens,
+    m: MessageScrollerMetrics,
+) -> bool {
     let center = egui::pos2(
-        viewport.right() - BUTTON_INSET - BUTTON / 2.0,
-        viewport.bottom() - BUTTON_INSET - BUTTON / 2.0,
+        viewport.right() - m.button_inset - m.button / 2.0,
+        viewport.bottom() - m.button_inset - m.button / 2.0,
     );
-    let rect = egui::Rect::from_center_size(center, Vec2::splat(BUTTON));
+    let rect = egui::Rect::from_center_size(center, Vec2::splat(m.button));
     let resp = ui.interact(rect, id.with("jump"), Sense::click());
     let fill = if resp.hovered() {
         tokens.primary.gamma_multiply(0.92)
@@ -434,8 +466,8 @@ fn jump_button(ui: &Ui, id: egui::Id, viewport: egui::Rect, tokens: Tokens) -> b
         tokens.primary
     };
     let painter = ui.painter();
-    painter.circle_filled(center, BUTTON / 2.0, fill);
-    painter.circle_stroke(center, BUTTON / 2.0, egui::Stroke::new(1.0, tokens.border));
+    painter.circle_filled(center, m.button / 2.0, fill);
+    painter.circle_stroke(center, m.button / 2.0, egui::Stroke::new(1.0, tokens.border));
     paint_chevron_down(painter, center, tokens.primary_foreground);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()

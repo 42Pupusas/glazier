@@ -20,20 +20,39 @@ use egui::{Color32, Response, Sense, Ui, Vec2, Widget};
 
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Marker text size (shadcn `text-sm`, tuned to the transcript scale).
-const TEXT_SIZE: f32 = 13.0;
-/// Leading icon edge (shadcn `size-4`).
-const ICON: f32 = 16.0;
-/// Gap between the icon and the label (shadcn `gap-2`).
-const ICON_GAP: f32 = 8.0;
-/// Gap between a separator's label and its divider lines (shadcn `gap-2`).
-const SEP_GAP: f32 = 8.0;
-/// Row height, so consecutive markers share a centreline.
-const ROW_H: f32 = 24.0;
-/// Shimmer sweep period in seconds.
-const SHIMMER_PERIOD: f64 = 1.6;
+/// Overridable geometry/timing for [`Marker`] — reach in via
+/// [`Marker::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct MarkerMetrics {
+    /// Marker text size (shadcn `text-sm`, tuned to the transcript scale).
+    pub text_size: f32,
+    /// Leading icon edge (shadcn `size-4`).
+    pub icon: f32,
+    /// Gap between the icon and the label (shadcn `gap-2`).
+    pub icon_gap: f32,
+    /// Gap between a separator's label and its divider lines (shadcn `gap-2`).
+    pub sep_gap: f32,
+    /// Row height, so consecutive markers share a centreline.
+    pub row_h: f32,
+    /// Shimmer sweep period in seconds.
+    pub shimmer_period: f64,
+}
+
+impl Default for MarkerMetrics {
+    fn default() -> Self {
+        Self {
+            text_size: 13.0,
+            icon: 16.0,
+            icon_gap: 8.0,
+            sep_gap: 8.0,
+            row_h: 24.0,
+            shimmer_period: 1.6,
+        }
+    }
+}
 
 /// Visual style of a [`Marker`], mirroring shadcn's `variant` prop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -67,6 +86,7 @@ pub struct Marker {
     icon: Option<Icon>,
     shimmer: bool,
     style_hook: StyleHook<MarkerStyle>,
+    sizing_hook: SizingHook<MarkerMetrics>,
 }
 
 /// [`Marker`]'s resolved paint — the text/icon colour. The real value
@@ -86,6 +106,7 @@ impl Marker {
             icon: None,
             shimmer: false,
             style_hook: StyleHook::default(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -116,9 +137,16 @@ impl Customize<MarkerStyle> for Marker {
     }
 }
 
+impl Sizeable<MarkerMetrics> for Marker {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<MarkerMetrics> {
+        &mut self.sizing_hook
+    }
+}
+
 impl Widget for Marker {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let mut style = MarkerStyle {
             color: tokens.muted_foreground,
         };
@@ -126,24 +154,24 @@ impl Widget for Marker {
         let MarkerStyle { color } = style;
 
         if self.variant == Variant::Separator {
-            return separator(ui, &self.text, color, tokens);
+            return separator(ui, &self.text, color, tokens, m);
         }
 
         let width = ui.available_width();
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row_h), Sense::hover());
 
         if ui.is_rect_visible(rect) {
             let mut cursor = rect.left();
             if let Some(icon) = self.icon {
                 let ir = egui::Rect::from_min_size(
-                    egui::pos2(cursor, rect.center().y - ICON / 2.0),
-                    Vec2::splat(ICON),
+                    egui::pos2(cursor, rect.center().y - m.icon / 2.0),
+                    Vec2::splat(m.icon),
                 );
-                icon.size(ICON).color(color).image(tokens).paint_at(ui, ir);
-                cursor += ICON + ICON_GAP;
+                icon.size(m.icon).color(color).image(tokens).paint_at(ui, ir);
+                cursor += m.icon + m.icon_gap;
             }
 
-            let font = egui::FontId::proportional(TEXT_SIZE);
+            let font = egui::FontId::proportional(m.text_size);
             let galley = ui
                 .painter()
                 .layout_no_wrap(self.text.clone(), font.clone(), color);
@@ -152,7 +180,7 @@ impl Widget for Marker {
             ui.painter().galley(pos, galley.clone(), color);
 
             if self.shimmer {
-                paint_shimmer(ui, &self.text, font, pos, galley.size(), tokens);
+                paint_shimmer(ui, &self.text, font, pos, galley.size(), tokens, m);
             }
 
             // The border variant rules off the bottom of the row.
@@ -171,14 +199,14 @@ impl Widget for Marker {
 
 /// Paint the [`Separator`](Variant::Separator) variant: a centred label with a
 /// hairline rule extending to each edge.
-fn separator(ui: &mut Ui, text: &str, color: Color32, tokens: Tokens) -> Response {
+fn separator(ui: &mut Ui, text: &str, color: Color32, tokens: Tokens, m: MarkerMetrics) -> Response {
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row_h), Sense::hover());
 
     if ui.is_rect_visible(rect) {
         let galley = ui.painter().layout_no_wrap(
             text.to_owned(),
-            egui::FontId::proportional(TEXT_SIZE),
+            egui::FontId::proportional(m.text_size),
             color,
         );
         let tw = galley.size().x;
@@ -188,10 +216,10 @@ fn separator(ui: &mut Ui, text: &str, color: Color32, tokens: Tokens) -> Respons
         let stroke = egui::Stroke::new(1.0, tokens.border);
         // Left rule.
         ui.painter()
-            .hline(rect.left()..=(cx - half - SEP_GAP), cy, stroke);
+            .hline(rect.left()..=(cx - half - m.sep_gap), cy, stroke);
         // Right rule.
         ui.painter()
-            .hline((cx + half + SEP_GAP)..=rect.right(), cy, stroke);
+            .hline((cx + half + m.sep_gap)..=rect.right(), cy, stroke);
         let pos = egui::pos2(cx - half, cy - galley.size().y / 2.0);
         ui.painter().galley(pos, galley, color);
     }
@@ -208,10 +236,11 @@ fn paint_shimmer(
     pos: egui::Pos2,
     size: Vec2,
     tokens: Tokens,
+    m: MarkerMetrics,
 ) {
     let time = ui.input(|i| i.time);
     #[allow(clippy::cast_possible_truncation)]
-    let t = (time / SHIMMER_PERIOD).rem_euclid(1.0) as f32;
+    let t = (time / m.shimmer_period).rem_euclid(1.0) as f32;
 
     let band = size.x.mul_add(0.35, 24.0);
     let start = pos.x - band;

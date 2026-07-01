@@ -10,13 +10,30 @@ use std::collections::BTreeSet;
 
 use egui::{CornerRadius, Response, Sense, Stroke, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Seconds for the per-segment on/hover transition.
-const TOGGLE_TIME: f32 = 0.15;
-/// Per-segment horizontal padding and height — matches `ButtonGroup` (`h-8`, `px-3`).
-const PAD_X: f32 = 12.0;
-const HEIGHT: f32 = 32.0;
+/// Overridable geometry/timing for [`ToggleGroup`] — reach in via
+/// [`ToggleGroup::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct ToggleGroupMetrics {
+    /// Seconds for the per-segment on/hover transition.
+    pub toggle_time: f32,
+    /// Per-segment horizontal padding — matches `ButtonGroup` (`px-3`).
+    pub pad_x: f32,
+    /// Row height — matches `ButtonGroup` (`h-8`).
+    pub height: f32,
+}
+
+impl Default for ToggleGroupMetrics {
+    fn default() -> Self {
+        Self {
+            toggle_time: 0.15,
+            pad_x: 12.0,
+            height: 32.0,
+        }
+    }
+}
 
 /// Selection model for a [`ToggleGroup`].
 enum Selection<'a> {
@@ -41,6 +58,13 @@ enum Selection<'a> {
 pub struct ToggleGroup<'a> {
     selection: Selection<'a>,
     options: Vec<String>,
+    sizing_hook: SizingHook<ToggleGroupMetrics>,
+}
+
+impl Sizeable<ToggleGroupMetrics> for ToggleGroup<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<ToggleGroupMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> ToggleGroup<'a> {
@@ -54,6 +78,7 @@ impl<'a> ToggleGroup<'a> {
         Self {
             selection: Selection::Single(selected),
             options: options.into_iter().map(Into::into).collect(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -66,14 +91,18 @@ impl<'a> ToggleGroup<'a> {
         Self {
             selection: Selection::Multiple(selected),
             options: options.into_iter().map(Into::into).collect(),
+            sizing_hook: SizingHook::default(),
         }
     }
 }
 
 impl Widget for ToggleGroup<'_> {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
-        let ToggleGroup { selection, options } = self;
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
+        let ToggleGroup {
+            selection, options, ..
+        } = self;
 
         // Measure each segment so the row width is known up front. Lay the text
         // out with `PLACEHOLDER` as its colour so the per-segment `text_col`
@@ -94,15 +123,15 @@ impl Widget for ToggleGroup<'_> {
             .collect();
         let widths: Vec<f32> = galleys
             .iter()
-            .map(|g| PAD_X.mul_add(2.0, g.size().x))
+            .map(|g| m.pad_x.mul_add(2.0, g.size().x))
             .collect();
         let total_w: f32 = widths.iter().sum();
 
-        let (rect, response) = ui.allocate_at_least(Vec2::new(total_w, HEIGHT), Sense::hover());
+        let (rect, response) = ui.allocate_at_least(Vec2::new(total_w, m.height), Sense::hover());
         // The layout may stretch `rect` wider than the segments need (e.g. in a
         // column); pin all geometry to the intrinsic `total_w` so the group
         // hugs its content and stays left-aligned instead of covering the row.
-        let bounds = egui::Rect::from_min_size(rect.left_top(), Vec2::new(total_w, HEIGHT));
+        let bounds = egui::Rect::from_min_size(rect.left_top(), Vec2::new(total_w, m.height));
         // Use the same large radius as `ButtonGroup` so both widget families
         // read as visually consistent pill-shaped controls.
         let radius = tokens.radius_2xl();
@@ -126,8 +155,10 @@ impl Widget for ToggleGroup<'_> {
 
             let mut x = bounds.left();
             for (i, w) in widths.iter().enumerate() {
-                let seg =
-                    egui::Rect::from_min_size(egui::pos2(x, bounds.top()), Vec2::new(*w, HEIGHT));
+                let seg = egui::Rect::from_min_size(
+                    egui::pos2(x, bounds.top()),
+                    Vec2::new(*w, m.height),
+                );
                 let seg_resp = ui.interact(seg, response.id.with(i), Sense::click());
                 if seg_resp.clicked() {
                     clicked = Some(i);
@@ -136,7 +167,7 @@ impl Widget for ToggleGroup<'_> {
                 let hover_t = ui.ctx().animate_bool_with_time(
                     response.id.with(("hover", i)),
                     seg_resp.hovered(),
-                    TOGGLE_TIME,
+                    m.toggle_time,
                 );
                 // Selection eases in/out via its own time-based 0→1 (`on_t`)
                 // so the `primary` chip fades between segments instead of
@@ -148,7 +179,7 @@ impl Widget for ToggleGroup<'_> {
                 let on_t = ui.ctx().animate_bool_with_time(
                     response.id.with(("on", i)),
                     selected,
-                    TOGGLE_TIME,
+                    m.toggle_time,
                 );
                 let base = tokens.background.lerp_to_gamma(tokens.accent, hover_t);
                 let fill = base.lerp_to_gamma(tokens.primary, on_t);

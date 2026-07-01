@@ -22,7 +22,34 @@
 use egui::{Response, RichText, Stroke, Ui, Vec2, Widget};
 
 use crate::fonts;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
+
+/// Overridable geometry for [`Typography`] — reach in via
+/// [`Typography::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct TypographyMetrics {
+    /// Blockquote left border thickness.
+    pub blockquote_border_w: f32,
+    /// Blockquote left padding, including the border (shadcn `pl-6`, trimmed).
+    pub blockquote_pad_l: f32,
+    /// List bullet column width (bullet + gap before the text).
+    pub list_bullet_col: f32,
+    /// List `h2`-style bottom-rule gap. Also reused as the `h2` post-heading
+    /// spacer.
+    pub h2_rule_gap: f32,
+}
+
+impl Default for TypographyMetrics {
+    fn default() -> Self {
+        Self {
+            blockquote_border_w: 2.0,
+            blockquote_pad_l: 16.0,
+            list_bullet_col: 20.0,
+            h2_rule_gap: 8.0,
+        }
+    }
+}
 
 /// A prose style, mirroring the entries on shadcn's Typography page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -100,6 +127,13 @@ pub struct Typography {
     size: Option<f32>,
     /// Optional explicit colour, overriding the variant's default.
     color: Option<egui::Color32>,
+    sizing_hook: SizingHook<TypographyMetrics>,
+}
+
+impl Sizeable<TypographyMetrics> for Typography {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<TypographyMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Typography {
@@ -111,6 +145,7 @@ impl Typography {
             variant,
             size: None,
             color: None,
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -126,6 +161,7 @@ impl Typography {
             variant: Variant::List,
             size: None,
             color: None,
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -178,8 +214,9 @@ impl Typography {
 }
 
 impl Widget for Typography {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let variant = self.variant;
         let size = self.size.unwrap_or_else(|| variant.size());
 
@@ -192,9 +229,9 @@ impl Widget for Typography {
         });
 
         match variant {
-            Variant::Blockquote => blockquote(ui, &self.text, size, color, tokens),
+            Variant::Blockquote => blockquote(ui, &self.text, size, color, tokens, m),
             Variant::InlineCode => inline_code(ui, self.text, tokens),
-            Variant::List => bulleted_list(ui, &self.items, size, color),
+            Variant::List => bulleted_list(ui, &self.items, size, color, m),
             _ => {
                 let font = if variant.is_bold() {
                     fonts::bold(ui, size)
@@ -210,7 +247,7 @@ impl Widget for Typography {
                 let resp = ui.add(egui::Label::new(text).wrap());
                 // `h2` carries a bottom hairline (shadcn `border-b pb-2`).
                 if variant == Variant::H2 {
-                    ui.add_space(8.0);
+                    ui.add_space(m.h2_rule_gap);
                     let y = ui.cursor().top();
                     ui.painter()
                         .hline(ui.max_rect().x_range(), y, Stroke::new(1.0, tokens.border));
@@ -228,9 +265,10 @@ fn blockquote(
     size: f32,
     color: egui::Color32,
     tokens: Tokens,
+    m: TypographyMetrics,
 ) -> Response {
-    const BORDER_W: f32 = 2.0;
-    const PAD_L: f32 = 16.0; // shadcn `pl-6` ≈ 24px, trimmed for egui density
+    let border_w = m.blockquote_border_w;
+    let pad_l = m.blockquote_pad_l;
 
     ui.horizontal(|ui| {
         let avail = ui.available_width();
@@ -238,16 +276,16 @@ fn blockquote(
             text.to_owned(),
             egui::FontId::proportional(size),
             color,
-            (avail - BORDER_W - PAD_L).max(0.0),
+            (avail - border_w - pad_l).max(0.0),
         );
         let galley = ui.painter().layout_job(job);
         let height = galley.size().y;
 
         // Left border rule, full height of the wrapped quote.
         let (border_rect, _) =
-            ui.allocate_exact_size(Vec2::new(BORDER_W, height), egui::Sense::hover());
+            ui.allocate_exact_size(Vec2::new(border_w, height), egui::Sense::hover());
         ui.painter().rect_filled(border_rect, 0.0, tokens.border);
-        ui.add_space(PAD_L - BORDER_W);
+        ui.add_space(pad_l - border_w);
 
         ui.add(egui::Label::new(RichText::new(text).color(color).italics().size(size)).wrap())
     })
@@ -256,16 +294,20 @@ fn blockquote(
 
 /// Render a disc-bulleted list: each item on its own row, hanging indent under
 /// a `•` bullet (shadcn `list-disc`).
-fn bulleted_list(ui: &mut Ui, items: &[String], size: f32, color: egui::Color32) -> Response {
-    const BULLET_COL: f32 = 20.0; // bullet + gap before the text
-
+fn bulleted_list(
+    ui: &mut Ui,
+    items: &[String],
+    size: f32,
+    color: egui::Color32,
+    m: TypographyMetrics,
+) -> Response {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 6.0; // shadcn `[&>li]:mt-2`
         for item in items {
             ui.horizontal_top(|ui| {
                 ui.add_space(8.0); // `ml-6` inset
                 ui.label(RichText::new("\u{2022}").color(color).size(size));
-                let text_w = (ui.available_width() - BULLET_COL).max(0.0);
+                let text_w = (ui.available_width() - m.list_bullet_col).max(0.0);
                 ui.allocate_ui_with_layout(
                     Vec2::new(text_w, 0.0),
                     egui::Layout::top_down(egui::Align::Min),

@@ -8,14 +8,30 @@
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2, Widget, WidgetText};
 
 use crate::components::icon::Icon;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Seconds for the on/off + hover colour transition.
-const TOGGLE_TIME: f32 = 0.15;
-/// Gap between an inline icon and the label (shadcn `gap-1.5`).
-const ICON_GAP: f32 = 6.0;
-/// Inline icon edge length (shadcn `size-4`).
-const ICON_SIZE: f32 = 16.0;
+/// Overridable geometry/timing for [`Toggle`] — reach in via
+/// [`Toggle::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct ToggleMetrics {
+    /// Seconds for the on/off + hover colour transition.
+    pub toggle_time: f32,
+    /// Gap between an inline icon and the label (shadcn `gap-1.5`).
+    pub icon_gap: f32,
+    /// Inline icon edge length (shadcn `size-4`).
+    pub icon_size: f32,
+}
+
+impl Default for ToggleMetrics {
+    fn default() -> Self {
+        Self {
+            toggle_time: 0.15,
+            icon_gap: 6.0,
+            icon_size: 16.0,
+        }
+    }
+}
 
 /// Visual style of a [`Toggle`], mirroring shadcn's variant prop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -79,6 +95,13 @@ pub struct Toggle<'a> {
     variant: Variant,
     size: Size,
     icon: Option<Icon>,
+    sizing_hook: SizingHook<ToggleMetrics>,
+}
+
+impl Sizeable<ToggleMetrics> for Toggle<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<ToggleMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> Toggle<'a> {
@@ -91,6 +114,7 @@ impl<'a> Toggle<'a> {
             variant: Variant::default(),
             size: Size::default(),
             icon: None,
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -114,8 +138,9 @@ impl<'a> Toggle<'a> {
 }
 
 impl Widget for Toggle<'_> {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let padding = self.size.padding();
 
         let rich = self.text.into_galley(
@@ -126,8 +151,8 @@ impl Widget for Toggle<'_> {
         );
         let has_label = rich.size().x > 0.0;
         let has_icon = self.icon.is_some();
-        let gap = if has_label && has_icon { ICON_GAP } else { 0.0 };
-        let icon_w = if has_icon { ICON_SIZE } else { 0.0 };
+        let gap = if has_label && has_icon { m.icon_gap } else { 0.0 };
+        let icon_w = if has_icon { m.icon_size } else { 0.0 };
         let content_w = rich.size().x + icon_w + gap;
 
         let desired = Vec2::new(
@@ -150,11 +175,11 @@ impl Widget for Toggle<'_> {
         // Eased on value, plus a hover value for the unpressed hover surface.
         let on_t = ui
             .ctx()
-            .animate_bool_with_time(response.id.with("on"), *self.on, TOGGLE_TIME);
+            .animate_bool_with_time(response.id.with("on"), *self.on, m.toggle_time);
         let hover_t = ui.ctx().animate_bool_with_time(
             response.id.with("hover"),
             response.hovered(),
-            TOGGLE_TIME,
+            m.toggle_time,
         );
 
         if ui.is_rect_visible(rect) {
@@ -207,11 +232,11 @@ impl Widget for Toggle<'_> {
             let cy = rect.center().y;
             if let Some(icon) = self.icon {
                 let r = egui::Rect::from_min_size(
-                    egui::pos2(cursor, cy - ICON_SIZE / 2.0),
-                    Vec2::splat(ICON_SIZE),
+                    egui::pos2(cursor, cy - m.icon_size / 2.0),
+                    Vec2::splat(m.icon_size),
                 );
                 icon.color(text_col).image(tokens).paint_at(ui, r);
-                cursor += ICON_SIZE + gap;
+                cursor += m.icon_size + gap;
             }
             let galley_size = rich.size();
             ui.painter()
