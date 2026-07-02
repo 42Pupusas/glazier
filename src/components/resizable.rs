@@ -36,8 +36,8 @@ pub struct ResizableMetrics {
 impl Default for ResizableMetrics {
     fn default() -> Self {
         Self {
-            divider: 1.0,
-            hit: 11.0,
+            divider: 2.0,
+            hit: 12.0,
         }
     }
 }
@@ -295,26 +295,22 @@ fn resolve_style(tokens: Tokens, hook: StyleHook<ResizableStyle>) -> ResizableSt
     style
 }
 
-/// Paint shadcn's `withHandle` grip: a tiny rounded bar straddling the divider
-/// with a couple of dots, oriented across the split axis.
+/// Paint the drag grip: a rounded pill centred on the divider with three dots
+/// perpendicular to the split axis.
+///
+/// Horizontal split (vertical divider): pill is `10 × 24`, dots stacked vertically.
+/// Vertical split (horizontal divider): pill is `24 × 10`, dots side by side.
 fn paint_grip(ui: &Ui, center: egui::Pos2, horizontal: bool, color: egui::Color32) {
-    // The grip bar is a small rounded rect centred on the divider.
-    let (w, h) = if horizontal {
-        (10.0, 18.0)
-    } else {
-        (18.0, 10.0)
-    };
+    let (w, h) = if horizontal { (10.0, 24.0) } else { (24.0, 10.0) };
     let bar = egui::Rect::from_center_size(center, Vec2::new(w, h));
-    ui.painter()
-        .rect_filled(bar, 3.0, color.gamma_multiply(0.18));
-    // Two faint dots along the cross axis.
-    for s in [-3.0_f32, 3.0] {
+    ui.painter().rect_filled(bar, 4.0, color.gamma_multiply(0.30));
+    for s in [-5.0_f32, 0.0, 5.0] {
         let p = if horizontal {
             egui::pos2(center.x, center.y + s)
         } else {
             egui::pos2(center.x + s, center.y)
         };
-        ui.painter().circle_filled(p, 1.0, color);
+        ui.painter().circle_filled(p, 1.5, color);
     }
 }
 
