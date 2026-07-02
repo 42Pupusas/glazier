@@ -182,12 +182,12 @@ impl Widget for Input<'_> {
             m.v_pad_full
         };
 
-        // Opaque `card` surface when enabled — `background` is the
+        // Opaque `widget` surface when enabled — `background` is the
         // app-canvas token and may be translucent under a user theme.
         let fill = if self.disabled {
             tokens.muted
         } else {
-            tokens.card
+            tokens.widget
         };
         let text_color = if self.disabled {
             tokens.muted_foreground

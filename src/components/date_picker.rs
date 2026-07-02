@@ -242,7 +242,7 @@ fn button_trigger(
             trigger.hovered(),
             m.hover_time,
         );
-        let fill = tokens.card.lerp_to_gamma(tokens.accent, hover_t);
+        let fill = tokens.widget.lerp_to_gamma(tokens.accent, hover_t);
         ui.painter().rect(
             rect,
             tokens.radius_md(),
@@ -333,7 +333,7 @@ fn icon_button(ui: &mut Ui, tokens: Tokens, m: DatePickerMetrics) -> Response {
         let hover_t =
             ui.ctx()
                 .animate_bool_with_time(resp.id.with("hover"), resp.hovered(), m.hover_time);
-        let fill = tokens.card.lerp_to_gamma(tokens.accent, hover_t);
+        let fill = tokens.widget.lerp_to_gamma(tokens.accent, hover_t);
         ui.painter().rect(
             rect,
             tokens.radius_md(),

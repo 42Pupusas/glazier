@@ -170,18 +170,19 @@ impl Widget for ToggleGroup<'_> {
                 // Selection eases in/out via its own time-based 0→1 (`on_t`)
                 // so the `primary` chip fades between segments instead of
                 // snapping. We blend *from the segment's own unselected look*
-                // (the opaque `card` surface, plus any hover `accent` lift)
+                // (the opaque `widget` surface, plus any hover `accent` lift)
                 // straight to `primary` — a single solid→solid lerp that
                 // always completes, so there's no neutral midpoint to get
-                // stuck on. `card`, not `background`, since the latter is the
-                // app-canvas token and may be translucent under a user theme.
+                // stuck on. `widget`, not `background`, since the latter is
+                // the app-canvas token and may be translucent under a user
+                // theme.
                 let selected = is_on(i);
                 let on_t = ui.ctx().animate_bool_with_time(
                     response.id.with(("on", i)),
                     selected,
                     m.toggle_time,
                 );
-                let base = tokens.card.lerp_to_gamma(tokens.accent, hover_t);
+                let base = tokens.widget.lerp_to_gamma(tokens.accent, hover_t);
                 let fill = base.lerp_to_gamma(tokens.primary, on_t);
                 if on_t > 0.01 || hover_t > 0.01 {
                     // Round the outer corners so the fill never pokes past the

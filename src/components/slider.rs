@@ -147,12 +147,12 @@ impl Widget for Slider<'_> {
                 m.hover_time,
             );
             let r = 1.0_f32.mul_add(grow, m.thumb / 2.0);
-            // Opaque `card` fill, not `background` — the app canvas token can
-            // be translucent, which would make this thumb see-through.
+            // Opaque `widget` fill, not `background` — the app canvas token
+            // can be translucent, which would make this thumb see-through.
             painter.circle(
                 egui::pos2(thumb_x, cy),
                 r,
-                tokens.card,
+                tokens.widget,
                 Stroke::new(2.0, tokens.primary),
             );
         }

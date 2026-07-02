@@ -272,14 +272,14 @@ fn list_inner(
             egui::pos2(chip_x, track.top() + TRACK_PAD),
             Vec2::new(chip_w, INNER_H),
         );
-        // Soft shadow + opaque `card` fill so the active trigger floats above
-        // the (possibly translucent) app `background`.
+        // Soft shadow + opaque `widget` fill so the active trigger floats
+        // above the (possibly translucent) app `background`.
         painter.rect_filled(
             chip.translate(Vec2::new(0.0, 1.0)),
             inner_radius(tokens),
             tokens.border.gamma_multiply(0.5),
         );
-        painter.rect_filled(chip, inner_radius(tokens), tokens.card);
+        painter.rect_filled(chip, inner_radius(tokens), tokens.widget);
     }
 
     let mut clicked: Option<usize> = None;

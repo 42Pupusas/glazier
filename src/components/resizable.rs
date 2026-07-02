@@ -187,12 +187,11 @@ impl Resizable {
             )
         };
 
-        // Paint the divider hairline.
-        let divider_paint_color = self.divider_color.unwrap_or(tokens.border);
-        ui.painter()
-            .rect_filled(divider_rect, 0.0, divider_paint_color);
-
-        // Interact over a wider hit-strip centred on the divider.
+        // Interact over a wider hit-strip centred on the divider. Done
+        // before the panes render so dragging feels immediate, but the
+        // *painting* of the hairline/grip happens after (below) — a pane
+        // with an edge-to-edge opaque fill (e.g. a `Card`) would otherwise
+        // draw right over the handle, hiding it entirely.
         let hit = if horizontal {
             egui::Rect::from_center_size(divider_rect.center(), Vec2::new(m.hit, cross))
         } else {
@@ -218,18 +217,6 @@ impl Resizable {
             ui.ctx().data_mut(|d| d.insert_temp(id, fraction));
         }
 
-        // Optional grip: a short dot/line cluster on the divider, lifting on
-        // hover so it reads as a handle.
-        if self.handle_grip {
-            let active = drag.hovered() || drag.dragged();
-            let color = if active {
-                tokens.foreground
-            } else {
-                tokens.muted_foreground
-            };
-            paint_grip(ui, divider_rect.center(), horizontal, color);
-        }
-
         // Render each pane clipped to its rect.
         // Always use top_down layout so pane content flows vertically
         // regardless of the parent layout (e.g. horizontal_top).
@@ -249,6 +236,23 @@ impl Resizable {
         );
         child.set_clip_rect(second_rect);
         second(&mut child);
+
+        // Paint the divider hairline and optional grip *after* both panes,
+        // so an edge-to-edge opaque pane fill (e.g. a `Card`) never covers
+        // the handle — draw calls issued later land on top within the same
+        // layer.
+        let divider_paint_color = self.divider_color.unwrap_or(tokens.border);
+        ui.painter()
+            .rect_filled(divider_rect, 0.0, divider_paint_color);
+        if self.handle_grip {
+            let active = drag.hovered() || drag.dragged();
+            let color = if active {
+                tokens.foreground
+            } else {
+                tokens.muted_foreground
+            };
+            paint_grip(ui, divider_rect.center(), horizontal, color);
+        }
 
         drag
     }

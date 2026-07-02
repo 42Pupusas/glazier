@@ -281,12 +281,12 @@ fn trigger(
         } else {
             Stroke::new(1.0, tokens.input)
         };
-        // Opaque `card` surface — `background` is the app-canvas token and
+        // Opaque `widget` surface — `background` is the app-canvas token and
         // may be translucent under a user theme.
         ui.painter().rect(
             rect,
             tokens.radius_md(),
-            tokens.card,
+            tokens.widget,
             stroke,
             StrokeKind::Inside,
         );

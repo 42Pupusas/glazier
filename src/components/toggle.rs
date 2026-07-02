@@ -196,9 +196,9 @@ impl Widget for Toggle<'_> {
                     let fill = if lit < 0.01 {
                         Color32::TRANSPARENT
                     } else {
-                        // `card`, not `background` — the app-canvas token can
-                        // be translucent under a user theme.
-                        tokens.card.lerp_to_gamma(tokens.accent, lit)
+                        // `widget`, not `background` — the app-canvas token
+                        // can be translucent under a user theme.
+                        tokens.widget.lerp_to_gamma(tokens.accent, lit)
                     };
                     let text = tokens
                         .foreground
@@ -218,9 +218,9 @@ impl Widget for Toggle<'_> {
                     let off = if hover_t < 0.01 {
                         Color32::TRANSPARENT
                     } else {
-                        // `card`, not `background` — the app-canvas token can
-                        // be translucent under a user theme.
-                        tokens.card.lerp_to_gamma(tokens.accent, hover_t)
+                        // `widget`, not `background` — the app-canvas token
+                        // can be translucent under a user theme.
+                        tokens.widget.lerp_to_gamma(tokens.accent, hover_t)
                     };
                     let fill = off.lerp_to_gamma(tokens.primary, on_t);
                     let text = tokens

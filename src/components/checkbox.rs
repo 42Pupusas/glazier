@@ -110,9 +110,9 @@ impl Widget for Checkbox<'_> {
             let radius = tokens.radius_sm();
             let painter = ui.painter();
             // Border fades out as the fill fades in; fill lerps from the empty
-            // (opaque `card`) surface to `primary` — not `background`, which
+            // (opaque `widget`) surface to `primary` — not `background`, which
             // may be translucent under a user theme.
-            let fill = tokens.card.lerp_to_gamma(tokens.primary, t);
+            let fill = tokens.widget.lerp_to_gamma(tokens.primary, t);
             let border = Stroke::new(1.0, tokens.input.gamma_multiply(1.0 - t));
             painter.rect(box_rect, radius, fill, border, egui::StrokeKind::Inside);
             if t > 0.01 {

@@ -67,11 +67,11 @@ impl<'a> Textarea<'a> {
 
 /// shadcn's `bg-input/50`: the input color blended halfway toward the surface.
 ///
-/// Blends toward `card` (the opaque elevated surface), not `background` (the
-/// app canvas token) — `background` can be made translucent by a user theme,
-/// which would leak through into this control's fill.
+/// Blends toward `widget` (the opaque interactive-control surface), not
+/// `background` (the app canvas token, which a user theme may make
+/// translucent) nor `card` (reserved for static containers).
 fn filled_input(tokens: Tokens) -> Color32 {
-    tokens.input.lerp_to_gamma(tokens.card, 0.5)
+    tokens.input.lerp_to_gamma(tokens.widget, 0.5)
 }
 
 impl Widget for Textarea<'_> {

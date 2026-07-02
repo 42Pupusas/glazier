@@ -361,7 +361,7 @@ impl Chart {
                 let r = if active == Some(cat) { 4.0 } else { 2.5 };
                 painter.circle_filled(*p, r, color);
                 if active == Some(cat) {
-                    painter.circle_stroke(*p, r, Stroke::new(2.0, Tokens::get(ui).card));
+                    painter.circle_stroke(*p, r, Stroke::new(2.0, Tokens::get(ui).widget));
                 }
             }
         }
@@ -447,10 +447,12 @@ impl Chart {
         let top = plot.top() + 6.0;
         let card = Rect::from_min_size(Pos2::new(left, top), Vec2::new(box_w, box_h));
 
+        // Floating tooltip surface: opaque `widget`, not `background`
+        // (translucent-capable app canvas) nor `card` (static containers).
         painter.rect(
             card,
             tokens.radius_md(),
-            tokens.card,
+            tokens.widget,
             Stroke::new(1.0, tokens.border),
             StrokeKind::Inside,
         );

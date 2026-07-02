@@ -155,8 +155,9 @@ fn radio_item(
 
 /// shadcn's `bg-input/90`: the input color blended slightly toward the surface.
 ///
-/// Blends toward the opaque `card` surface, not `background` — the app-canvas
-/// token can be translucent, which would leak through this control's fill.
+/// Blends toward the opaque `widget` surface, not `background` — the
+/// app-canvas token can be translucent, which would leak through this
+/// control's fill.
 fn filled_input(tokens: Tokens) -> Color32 {
-    tokens.input.lerp_to_gamma(tokens.card, 0.1)
+    tokens.input.lerp_to_gamma(tokens.widget, 0.1)
 }

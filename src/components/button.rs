@@ -122,9 +122,11 @@ impl Variant {
                 radius: t.radius_md(),
             },
             Self::Outline => ButtonStyle {
-                // Opaque `card` surface, not `background` — a translucent
+                // Opaque `widget` surface, not `background` — a translucent
                 // app-canvas token would leak into every outline button.
-                fill: t.card,
+                // Not `card` either: that's reserved for static containers,
+                // not interactive buttons.
+                fill: t.widget,
                 stroke: Stroke::new(1.0, t.border),
                 text: t.foreground,
                 underline: false,

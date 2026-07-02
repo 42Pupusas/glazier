@@ -265,9 +265,9 @@ impl ButtonGroup {
                 }
 
                 let (fill, text_color) = if is_disabled {
-                    // Opaque `card`, not `background` — the app-canvas token
-                    // can be translucent under a user theme.
-                    (tokens.card, tokens.muted_foreground)
+                    // Opaque `widget`, not `background` — the app-canvas
+                    // token can be translucent under a user theme.
+                    (tokens.widget, tokens.muted_foreground)
                 } else {
                     segment_paint(self.variant, tokens, seg_response.hovered())
                 };
@@ -318,9 +318,9 @@ fn segment_paint(
 ) -> (egui::Color32, egui::Color32) {
     match variant {
         Variant::Outline if hovered => (tokens.muted, tokens.foreground),
-        // Opaque `card`, not `background` — the app-canvas token can be
+        // Opaque `widget`, not `background` — the app-canvas token can be
         // translucent under a user theme.
-        Variant::Outline => (tokens.card, tokens.foreground),
+        Variant::Outline => (tokens.widget, tokens.foreground),
         Variant::Secondary if hovered => (
             tokens.secondary.gamma_multiply(0.9),
             tokens.secondary_foreground,

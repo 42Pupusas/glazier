@@ -119,11 +119,12 @@ fn geometry(
     viewport: egui::Rect,
     tokens: Tokens,
 ) -> Geometry {
-    // Opaque `card` surface — `background` is the app-canvas token and may
-    // be translucent under a user theme, which would make every modal
-    // see-through against the dimmed backdrop.
+    // Opaque `widget` (floating-surface) fill — `background` is the
+    // app-canvas token and may be translucent under a user theme, which
+    // would make every modal see-through against the dimmed backdrop; `card`
+    // is reserved for static containers, not floating overlays.
     let base = Frame::new()
-        .fill(tokens.card)
+        .fill(tokens.widget)
         .stroke(Stroke::new(1.0, tokens.border))
         .inner_margin(Margin::same(24)) // p-6
         .shadow(modal_shadow());
@@ -164,10 +165,10 @@ fn geometry(
             Geometry {
                 anchor,
                 transform: TSTransform::from_translation(offset),
-                // Edge-hugging panels sit on the elevated `card` surface
+                // Edge-hugging panels sit on the opaque `widget` surface
                 // (shadcn's `bg-popover`); the darkest `background` wouldn't
                 // contrast against the dimmed page in dark mode.
-                frame: base.fill(tokens.card).inner_margin(SHEET_MARGIN),
+                frame: base.fill(tokens.widget).inner_margin(SHEET_MARGIN),
                 content_width: cw,
             }
         }
@@ -212,9 +213,9 @@ fn geometry(
             Geometry {
                 anchor,
                 transform: TSTransform::from_translation(offset),
-                // Elevated `card` surface, as for the sheet, so it contrasts
+                // Opaque `widget` surface, as for the sheet, so it contrasts
                 // against the dimmed page in dark mode.
-                frame: base.fill(tokens.card).corner_radius(corners),
+                frame: base.fill(tokens.widget).corner_radius(corners),
                 content_width: cw,
             }
         }

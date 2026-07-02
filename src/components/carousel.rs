@@ -198,9 +198,9 @@ fn arrow(
     } else {
         0.0
     };
-    // Opaque `card` base, not `background` — the app-canvas token can be
+    // Opaque `widget` base, not `background` — the app-canvas token can be
     // translucent, which would make this arrow button see-through.
-    let fill = tokens.card.lerp_to_gamma(tokens.accent, hover_t);
+    let fill = tokens.widget.lerp_to_gamma(tokens.accent, hover_t);
     let stroke_c = if enabled {
         tokens.border
     } else {

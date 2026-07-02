@@ -84,10 +84,10 @@ impl Widget for Switch<'_> {
             let travel = m.inset.mul_add(-2.0, rect.width() - m.thumb);
             let cx = rect.left() + m.inset + m.thumb / 2.0 + travel * t;
             let cy = rect.center().y;
-            // Opaque `card` fill — `background` is the app-canvas token and
+            // Opaque `widget` fill — `background` is the app-canvas token and
             // may be translucent under a user theme, which would make the
             // thumb see-through against the track.
-            painter.circle_filled(egui::pos2(cx, cy), m.thumb / 2.0, tokens.card);
+            painter.circle_filled(egui::pos2(cx, cy), m.thumb / 2.0, tokens.widget);
         }
 
         response

@@ -514,10 +514,14 @@ fn stack_bounds(ctx: &egui::Context, corner: Corner, extent: f32) -> egui::Rect 
     egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(left + width, bottom))
 }
 
-/// Paint the card surface and its contents; returns whether × was clicked.
+/// Paint the toast surface and its contents; returns whether × was clicked.
+///
+/// Uses the opaque `widget` (popover) token — a toast is a floating overlay,
+/// not a static container, and `background` may be translucent under a user
+/// theme.
 fn card_body(ui: &mut Ui, tokens: Tokens, t: &LiveToast) -> bool {
     let frame = Frame::new()
-        .fill(tokens.card)
+        .fill(tokens.widget)
         .stroke(Stroke::new(1.0, tokens.border))
         .corner_radius(tokens.radius_lg())
         .inner_margin(Margin::symmetric(16, 15))
@@ -544,7 +548,7 @@ fn card_body(ui: &mut Ui, tokens: Tokens, t: &LiveToast) -> bool {
                 ui.label(
                     egui::RichText::new(&t.title)
                         .font(fonts::semibold(ui, 13.5))
-                        .color(tokens.card_foreground),
+                        .color(tokens.foreground),
                 );
                 if let Some(desc) = &t.description {
                     ui.label(

@@ -28,10 +28,25 @@ pub struct Tokens {
     pub background: Color32,
     /// Default text/icon color (`--foreground`).
     pub foreground: Color32,
-    /// Elevated surface — cards, panels (`--card`).
+    /// Elevated surface — cards, panels (`--card`). Reserved for
+    /// **persistent content containers** (`Card`, `Alert`, `Bubble`,
+    /// `Sidebar`, `Attachment`). Not for interactive widgets or floating
+    /// menus — see [`widget`](Self::widget), which several components used
+    /// to (incorrectly) borrow this token for.
     pub card: Color32,
     /// Text on [`card`](Self::card).
     pub card_foreground: Color32,
+    /// Opaque interactive-widget / floating-surface fill — buttons, form
+    /// controls (switch, checkbox, input, select triggers, …) and floating
+    /// overlays (popover, dropdown menu, dialog, tooltip). Distinct from
+    /// both [`background`](Self::background) (the app canvas, which a theme
+    /// may legitimately make translucent) and [`card`](Self::card)
+    /// (reserved for static containers) — so a translucent app theme can't
+    /// punch holes in buttons, and buttons don't visually double as cards.
+    /// Mirrors shadcn's `--popover`, widened to cover form-control chrome
+    /// glazier paints by hand instead of through egui's `Visuals` widget
+    /// states. Round-trips through [`extreme_bg_color`](egui::Visuals::extreme_bg_color).
+    pub widget: Color32,
     /// High-emphasis / brand surface — default button, selection (`--primary`).
     pub primary: Color32,
     /// Text on [`primary`](Self::primary).
@@ -71,6 +86,9 @@ impl Tokens {
             foreground: Color32::from_rgb(0x0a, 0x0a, 0x0a),
             card: Color32::from_rgb(0xff, 0xff, 0xff),
             card_foreground: Color32::from_rgb(0x0a, 0x0a, 0x0a),
+            // shadcn's neutral `--popover` matches `--card` by default (both
+            // white) — same value, independent token.
+            widget: Color32::from_rgb(0xff, 0xff, 0xff),
             primary: Color32::from_rgb(0x17, 0x17, 0x17),
             primary_foreground: Color32::from_rgb(0xfa, 0xfa, 0xfa),
             secondary: Color32::from_rgb(0xf5, 0xf5, 0xf5),
@@ -96,6 +114,9 @@ impl Tokens {
             foreground: Color32::from_rgb(0xfa, 0xfa, 0xfa),
             card: Color32::from_rgb(0x17, 0x17, 0x17),
             card_foreground: Color32::from_rgb(0xfa, 0xfa, 0xfa),
+            // shadcn's neutral `--popover` matches `--card` by default (both
+            // #171717) — same value, independent token.
+            widget: Color32::from_rgb(0x17, 0x17, 0x17),
             primary: Color32::from_rgb(0xe5, 0xe5, 0xe5),
             primary_foreground: Color32::from_rgb(0x17, 0x17, 0x17),
             secondary: Color32::from_rgb(0x26, 0x26, 0x26),
@@ -136,6 +157,7 @@ impl Tokens {
             foreground: f(self.foreground, other.foreground),
             card: f(self.card, other.card),
             card_foreground: f(self.card_foreground, other.card_foreground),
+            widget: f(self.widget, other.widget),
             primary: f(self.primary, other.primary),
             primary_foreground: f(self.primary_foreground, other.primary_foreground),
             secondary: f(self.secondary, other.secondary),
@@ -160,9 +182,10 @@ impl Tokens {
     ///
     /// | shadcn token         | egui `Visuals` field                         |
     /// |----------------------|----------------------------------------------|
-    /// | `background`         | `panel_fill`, `window_fill`, `extreme_bg_color` |
+    /// | `background`         | `panel_fill`, `window_fill`                  |
     /// | `foreground`         | `widgets.{noninteractive,inactive}.fg_stroke` |
     /// | `card`               | `widgets.noninteractive.bg_fill`             |
+    /// | `widget`             | `extreme_bg_color` (native `TextEdit` fill)  |
     /// | `primary`            | `selection.bg_fill`                          |
     /// | `primary_foreground` | `selection.stroke`                           |
     /// | `secondary`          | `widgets.inactive.{bg_fill,weak_bg_fill}`    |
@@ -178,7 +201,9 @@ impl Tokens {
         // Surfaces.
         v.panel_fill = self.background;
         v.window_fill = self.background;
-        v.extreme_bg_color = self.background; // input field background
+        // Opaque widget surface, not the (possibly translucent) app canvas —
+        // native `TextEdit`s should stay solid under a translucent theme.
+        v.extreme_bg_color = self.widget;
         v.faint_bg_color = self.muted;
         v.code_bg_color = self.muted;
 
@@ -256,6 +281,7 @@ impl Tokens {
             foreground,
             card: v.widgets.noninteractive.bg_fill,
             card_foreground: foreground,
+            widget: v.extreme_bg_color,
             primary: v.selection.bg_fill,
             primary_foreground: v.selection.stroke.color,
             secondary: v.widgets.inactive.bg_fill,
