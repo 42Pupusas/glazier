@@ -7,8 +7,9 @@
 //! caller's side. The handle shows a resize cursor on hover and an optional
 //! grip dot-row (shadcn's `withHandle`).
 
-use egui::{CursorIcon, Response, Sense, Ui, Vec2, Widget};
+use egui::{Color32, CursorIcon, Response, Sense, Ui, Vec2, Widget};
 
+use crate::customize::{Customize, StyleHook};
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
@@ -41,16 +42,42 @@ impl Default for ResizableMetrics {
     }
 }
 
+/// [`Resizable`]'s resolved paint — the divider hairline and grip colours.
+/// The real value [`Resizable`] paints with; reach in via
+/// [`Resizable::style`].
+#[derive(Clone, Copy, Debug)]
+pub struct ResizableStyle {
+    /// Divider hairline colour (defaults to `border`). Pass
+    /// [`Color32::TRANSPARENT`] to hide it entirely (useful when adjacent
+    /// card borders already provide visual separation).
+    pub divider: Color32,
+    /// Grip colour while hovered or dragged (defaults to `foreground`).
+    pub grip_active: Color32,
+    /// Grip colour at rest (defaults to `muted_foreground`).
+    pub grip_inactive: Color32,
+}
+
 /// A two-pane resizable split.
 ///
 /// ```no_run
-/// use glazier::resizable::Resizable;
+/// use glazier::resizable::{Resizable, ResizableStyle};
+/// use glazier::Customize as _;
 /// # egui::__run_test_ui(|ui| {
 /// Resizable::new("demo").show(
 ///     ui,
 ///     |ui| { ui.label("Left"); },
 ///     |ui| { ui.label("Right"); },
 /// );
+///
+/// // Reach into the resolved divider/grip colours via `.style` -- e.g. to
+/// // hide the hairline when adjacent card borders already separate the panes.
+/// Resizable::new("demo-hidden-divider")
+///     .style(|s: &mut ResizableStyle| s.divider = egui::Color32::TRANSPARENT)
+///     .show(
+///         ui,
+///         |ui| { ui.label("Left"); },
+///         |ui| { ui.label("Right"); },
+///     );
 /// # });
 /// ```
 #[must_use = "resizables do nothing unless shown"]
@@ -61,13 +88,19 @@ pub struct Resizable {
     min_fraction: f32,
     handle_grip: bool,
     size: Option<f32>,
-    divider_color: Option<egui::Color32>,
+    style_hook: StyleHook<ResizableStyle>,
     sizing_hook: SizingHook<ResizableMetrics>,
 }
 
 impl Sizeable<ResizableMetrics> for Resizable {
     fn sizing_hook_mut(&mut self) -> &mut SizingHook<ResizableMetrics> {
         &mut self.sizing_hook
+    }
+}
+
+impl Customize<ResizableStyle> for Resizable {
+    fn style_hook_mut(&mut self) -> &mut StyleHook<ResizableStyle> {
+        &mut self.style_hook
     }
 }
 
@@ -81,7 +114,7 @@ impl Resizable {
             min_fraction: 0.1,
             handle_grip: false,
             size: None,
-            divider_color: None,
+            style_hook: StyleHook::default(),
             sizing_hook: SizingHook::default(),
         }
     }
@@ -117,14 +150,6 @@ impl Resizable {
         self
     }
 
-    /// Override the divider colour. Pass [`egui::Color32::TRANSPARENT`] to
-    /// hide it entirely (useful when adjacent card borders already provide
-    /// visual separation).
-    pub const fn divider_color(mut self, color: egui::Color32) -> Self {
-        self.divider_color = Some(color);
-        self
-    }
-
     /// Render the two panes and the divider between them.
     pub fn show(
         mut self,
@@ -134,6 +159,7 @@ impl Resizable {
     ) -> Response {
         let tokens = Tokens::get(ui);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
+        let style = resolve_style(tokens, std::mem::take(&mut self.style_hook));
         let id = ui.make_persistent_id(self.id_source);
         let horizontal = self.direction == Direction::Horizontal;
 
@@ -241,21 +267,32 @@ impl Resizable {
         // so an edge-to-edge opaque pane fill (e.g. a `Card`) never covers
         // the handle — draw calls issued later land on top within the same
         // layer.
-        let divider_paint_color = self.divider_color.unwrap_or(tokens.border);
-        ui.painter()
-            .rect_filled(divider_rect, 0.0, divider_paint_color);
+        ui.painter().rect_filled(divider_rect, 0.0, style.divider);
         if self.handle_grip {
             let active = drag.hovered() || drag.dragged();
             let color = if active {
-                tokens.foreground
+                style.grip_active
             } else {
-                tokens.muted_foreground
+                style.grip_inactive
             };
             paint_grip(ui, divider_rect.center(), horizontal, color);
         }
 
         drag
     }
+}
+
+/// Resolve [`ResizableStyle`]'s defaults against `tokens`, then apply any
+/// pending [`Resizable::style`] hook. Split out of `show` to keep it under
+/// clippy's line-count ceiling.
+fn resolve_style(tokens: Tokens, hook: StyleHook<ResizableStyle>) -> ResizableStyle {
+    let mut style = ResizableStyle {
+        divider: tokens.border,
+        grip_active: tokens.foreground,
+        grip_inactive: tokens.muted_foreground,
+    };
+    hook.apply(&mut style);
+    style
 }
 
 /// Paint shadcn's `withHandle` grip: a tiny rounded bar straddling the divider

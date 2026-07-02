@@ -117,7 +117,7 @@ pub use pagination::{Pagination, PaginationMetrics};
 pub use popover::Popover;
 pub use progress::Progress;
 pub use radio_group::{RadioGroup, RadioGroupMetrics};
-pub use resizable::{Resizable, ResizableMetrics};
+pub use resizable::{Resizable, ResizableMetrics, ResizableStyle};
 pub use scroll_area::ScrollArea;
 pub use select::{Select, SelectMetrics};
 pub use separator::Separator;

@@ -61,6 +61,14 @@ way:
   `Textarea`, `Tooltip`, `Dialog`, `AlertDialog`, `Sheet`, `Drawer` (all four
   thread the hook through the shared `dialog::modal_shell`), `NavigationMenu`
   (the flyout panel frame), `SidebarMenu` (the group's outer padding frame).
+- **Finished 2026-07-01 (was left half-migrated):** `Resizable`/`ResizableStyle`
+  (divider hairline colour + hover/rest grip colours). It got the `Sizeable`
+  pass in sizing batch 1 but was skipped for `Customize` and kept a bespoke
+  `divider_color: Option<Color32>` builder — exactly the one-off escape hatch
+  this trait replaced everywhere else. Folded that single field into
+  `ResizableStyle` alongside the grip colours (previously not overridable at
+  all) and dropped the old builder method; downstream callers use
+  `.style(|s: &mut ResizableStyle| s.divider = ...)` instead.
 - `Badge::dot` stayed bespoke on purpose, as originally called out — it's a
   genuinely distinct sub-element (a status indicator), not the badge's own
   surface.
