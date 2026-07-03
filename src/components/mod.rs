@@ -130,7 +130,7 @@ pub use sonner::{Toast, Toaster};
 pub use spinner::{Spinner, SpinnerMetrics, SpinnerStyle};
 pub use switch::{Switch, SwitchMetrics};
 pub use table::{Sizing, Table, TableMetrics};
-pub use tabs::{Tabs, TabsResponse};
+pub use tabs::{Tabs, TabsMetrics, TabsResponse};
 pub use textarea::Textarea;
 pub use time_picker::{Time, TimePicker, TimePickerMetrics};
 pub use toggle::{Toggle, ToggleMetrics};

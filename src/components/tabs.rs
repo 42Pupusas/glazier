@@ -33,20 +33,45 @@
 
 use egui::{Id, Rect, Response, Sense, Stroke, Ui, Vec2, Widget};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Seconds for the active-chip slide / hover fade.
-const ANIM_TIME: f32 = 0.15;
-/// Track height and inner padding (shadcn `h-9`, `p-[3px]`).
-const TRACK_H: f32 = 36.0;
-const TRACK_PAD: f32 = 3.0;
-/// Per-trigger horizontal padding.
-const TRIGGER_PAD_X: f32 = 12.0;
-/// Height of a trigger / the active chip (track height minus top+bottom pad).
-const INNER_H: f32 = TRACK_H - 2.0 * TRACK_PAD;
-/// Close-glyph box edge length and the gap between a label and its `✕`.
-const CLOSE_SZ: f32 = 14.0;
-const CLOSE_GAP: f32 = 6.0;
+/// Overridable geometry/timing for [`Tabs`] — reach in via [`Tabs::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct TabsMetrics {
+    /// Seconds for the active-chip slide / hover fade.
+    pub anim_time: f32,
+    /// Track height (shadcn `h-9`).
+    pub track_h: f32,
+    /// Track inner padding (shadcn `p-[3px]`).
+    pub track_pad: f32,
+    /// Per-trigger horizontal padding.
+    pub trigger_pad_x: f32,
+    /// Close-glyph box edge length.
+    pub close_sz: f32,
+    /// Gap between a label and its trailing `✕`.
+    pub close_gap: f32,
+}
+
+impl Default for TabsMetrics {
+    fn default() -> Self {
+        Self {
+            anim_time: 0.15,
+            track_h: 36.0,
+            track_pad: 3.0,
+            trigger_pad_x: 12.0,
+            close_sz: 14.0,
+            close_gap: 6.0,
+        }
+    }
+}
+
+impl TabsMetrics {
+    /// Height of a trigger / the active chip (track height minus top+bottom pad).
+    const fn inner_h(self) -> f32 {
+        self.track_h - 2.0 * self.track_pad
+    }
+}
 
 /// Outcome of rendering a [`Tabs`] trigger row.
 ///
@@ -89,6 +114,13 @@ pub struct Tabs<'a> {
     reorderable: bool,
     scrollable: bool,
     id_salt: Option<Id>,
+    sizing_hook: SizingHook<TabsMetrics>,
+}
+
+impl Sizeable<TabsMetrics> for Tabs<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<TabsMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> Tabs<'a> {
@@ -106,6 +138,7 @@ impl<'a> Tabs<'a> {
             reorderable: false,
             scrollable: false,
             id_salt: None,
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -149,7 +182,8 @@ impl<'a> Tabs<'a> {
     ///
     /// The bound active index is updated on click; `closed` / `reordered` are
     /// returned for the caller to apply to its own tab model.
-    pub fn list_response(self, ui: &mut Ui) -> TabsResponse {
+    pub fn list_response(mut self, ui: &mut Ui) -> TabsResponse {
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         // Pull the fields out so the closure can borrow them past `self`.
         let Self {
             active,
@@ -158,6 +192,7 @@ impl<'a> Tabs<'a> {
             reorderable,
             scrollable,
             id_salt,
+            sizing_hook: _,
         } = self;
 
         if scrollable {
@@ -167,11 +202,11 @@ impl<'a> Tabs<'a> {
             egui::ScrollArea::horizontal()
                 .id_salt(salt)
                 .show(ui, |ui| {
-                    list_inner(ui, active, &labels, closable, reorderable, id_salt)
+                    list_inner(ui, active, &labels, closable, reorderable, id_salt, m)
                 })
                 .inner
         } else {
-            list_inner(ui, active, &labels, closable, reorderable, id_salt)
+            list_inner(ui, active, &labels, closable, reorderable, id_salt, m)
         }
     }
 
@@ -193,7 +228,7 @@ impl<'a> Tabs<'a> {
 
 /// Paint the trigger row and run hit-testing. Factored out of [`Tabs`] so it can
 /// run either bare or inside a horizontal [`egui::ScrollArea`].
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn list_inner(
     ui: &mut Ui,
     active: &mut usize,
@@ -201,6 +236,7 @@ fn list_inner(
     closable: bool,
     reorderable: bool,
     id_salt: Option<Id>,
+    m: TabsMetrics,
 ) -> TabsResponse {
     let tokens = Tokens::get(ui);
     let n = labels.len();
@@ -226,22 +262,26 @@ fn list_inner(
         })
         .collect();
     // A closable trigger reserves room for the gap + glyph after its label.
-    let close_extra = if closable { CLOSE_GAP + CLOSE_SZ } else { 0.0 };
+    let close_extra = if closable {
+        m.close_gap + m.close_sz
+    } else {
+        0.0
+    };
     let widths: Vec<f32> = galleys
         .iter()
-        .map(|g| TRIGGER_PAD_X.mul_add(2.0, g.size().x) + close_extra)
+        .map(|g| m.trigger_pad_x.mul_add(2.0, g.size().x) + close_extra)
         .collect();
-    let track_w = TRACK_PAD.mul_add(2.0, widths.iter().sum());
+    let track_w = m.track_pad.mul_add(2.0, widths.iter().sum());
 
-    let (rect, response) = ui.allocate_at_least(Vec2::new(track_w, TRACK_H), Sense::hover());
+    let (rect, response) = ui.allocate_at_least(Vec2::new(track_w, m.track_h), Sense::hover());
     // Pin geometry to the intrinsic width so the track hugs its triggers and
     // stays left-aligned even when the layout hands us a wider rect.
-    let track = Rect::from_min_size(rect.left_top(), Vec2::new(track_w, TRACK_H));
+    let track = Rect::from_min_size(rect.left_top(), Vec2::new(track_w, m.track_h));
 
     let base_id = id_salt.map_or(response.id, |s| response.id.with(s));
 
     // Per-trigger left edge in display order.
-    let left_of = |i: usize| -> f32 { TRACK_PAD + widths.iter().take(i).sum::<f32>() };
+    let left_of = |i: usize| -> f32 { m.track_pad + widths.iter().take(i).sum::<f32>() };
 
     // Active trigger's live drag offset (only meaningful while reordering).
     let active_offset: f32 = if reorderable {
@@ -258,7 +298,7 @@ fn list_inner(
         target_x // don't animate while actively dragging — track the pointer
     } else {
         ui.ctx()
-            .animate_value_with_time(response.id.with("chip_x"), target_x, ANIM_TIME)
+            .animate_value_with_time(response.id.with("chip_x"), target_x, m.anim_time)
     };
     let chip_w = widths[*active];
 
@@ -269,8 +309,8 @@ fn list_inner(
 
         // Active chip (animated x), inset within the track padding.
         let chip = Rect::from_min_size(
-            egui::pos2(chip_x, track.top() + TRACK_PAD),
-            Vec2::new(chip_w, INNER_H),
+            egui::pos2(chip_x, track.top() + m.track_pad),
+            Vec2::new(chip_w, m.inner_h()),
         );
         // Soft shadow + opaque `widget` fill so the active trigger floats
         // above the (possibly translucent) app `background`.
@@ -297,15 +337,18 @@ fn list_inner(
         };
         let seg_x = track.left() + left_of(i) + drag_offset;
         let seg = Rect::from_min_size(
-            egui::pos2(seg_x, track.top() + TRACK_PAD),
-            Vec2::new(*w, INNER_H),
+            egui::pos2(seg_x, track.top() + m.track_pad),
+            Vec2::new(*w, m.inner_h()),
         );
 
         // Trailing close box, carved from the right of the trigger.
         let close_rect = if closable {
             Rect::from_center_size(
-                egui::pos2(seg.right() - TRIGGER_PAD_X - CLOSE_SZ / 2.0, seg.center().y),
-                Vec2::splat(CLOSE_SZ),
+                egui::pos2(
+                    seg.right() - m.trigger_pad_x - m.close_sz / 2.0,
+                    seg.center().y,
+                ),
+                Vec2::splat(m.close_sz),
             )
         } else {
             Rect::NOTHING
@@ -371,7 +414,7 @@ fn list_inner(
                     );
                 }
                 let c = close_rect.center();
-                let h = CLOSE_SZ * 0.22;
+                let h = m.close_sz * 0.22;
                 let stroke = Stroke::new(1.4, tokens.muted_foreground);
                 ui.painter().line_segment(
                     [egui::pos2(c.x - h, c.y - h), egui::pos2(c.x + h, c.y + h)],
@@ -390,7 +433,7 @@ fn list_inner(
             let hover_t = ui.ctx().animate_bool_with_time(
                 response.id.with(("hover", i)),
                 seg_resp.hovered() && !is_active,
-                ANIM_TIME,
+                m.anim_time,
             );
             let text_col = if is_active {
                 tokens.foreground
@@ -402,7 +445,7 @@ fn list_inner(
             let g = &galleys[i];
             // Centre the label in the space left of the close box.
             let label_cx = if closable {
-                f32::midpoint(seg.left() + TRIGGER_PAD_X, close_rect.left())
+                f32::midpoint(seg.left() + m.trigger_pad_x, close_rect.left())
             } else {
                 seg.center().x
             };
