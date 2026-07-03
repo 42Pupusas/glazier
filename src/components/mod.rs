@@ -79,7 +79,7 @@ pub use attachment::{Attachment, AttachmentMetrics};
 pub use avatar::Avatar;
 pub use badge::{Badge, BadgeMetrics, BadgeStyle};
 pub use breadcrumb::{Breadcrumb, BreadcrumbMetrics};
-pub use bubble::{Bubble, BubbleGroup, BubbleStyle as BubbleSurfaceStyle};
+pub use bubble::{Bubble, BubbleGroup, BubbleMetrics, BubbleStyle as BubbleSurfaceStyle};
 pub use button::{Button, ButtonMetrics, ButtonStyle};
 pub use button_group::{ButtonGroup, ButtonGroupMetrics};
 pub use calendar::{Calendar, CalendarMetrics, Date};

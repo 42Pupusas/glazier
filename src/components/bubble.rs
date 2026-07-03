@@ -43,13 +43,51 @@ use egui::{
 };
 
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Fraction of the row width a framed bubble may occupy before its content
-/// wraps (shadcn caps bubbles at `max-w-[80%]`).
-const MAX_BUBBLE_FRAC: f32 = 0.8;
-/// How far the reaction row overlaps the bubble edge.
-const REACTION_OVERLAP: f32 = 11.0;
+/// Overridable geometry for [`Bubble`] — reach in via [`Bubble::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct BubbleMetrics {
+    /// Fraction of the row width a framed bubble may occupy before its
+    /// content wraps (shadcn caps bubbles at `max-w-[80%]`).
+    pub max_bubble_frac: f32,
+    /// How far the reaction row overlaps the bubble edge.
+    pub reaction_overlap: f32,
+    /// Bubble inner padding, horizontal.
+    pub bubble_pad_x: i8,
+    /// Bubble inner padding, vertical.
+    pub bubble_pad_y: i8,
+    /// Reaction chip text size.
+    pub reaction_text: f32,
+    /// Reaction chip height.
+    pub reaction_height: f32,
+    /// Reaction chip horizontal padding.
+    pub reaction_pad_x: f32,
+    /// Gap between reaction chips.
+    pub reaction_gap: f32,
+    /// Inset of the reaction row from the bubble's aligned edge.
+    pub reaction_inset: f32,
+    /// Default gap between stacked bubbles in a [`BubbleGroup`].
+    pub group_gap: f32,
+}
+
+impl Default for BubbleMetrics {
+    fn default() -> Self {
+        Self {
+            max_bubble_frac: 0.8,
+            reaction_overlap: 11.0,
+            bubble_pad_x: 12,
+            bubble_pad_y: 8,
+            reaction_text: 12.5,
+            reaction_height: 22.0,
+            reaction_pad_x: 7.0,
+            reaction_gap: 4.0,
+            reaction_inset: 8.0,
+            group_gap: 4.0,
+        }
+    }
+}
 
 /// The visual treatment of a [`Bubble`].
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -165,13 +203,20 @@ pub struct Bubble {
     reactions: Vec<String>,
     reactions_side: Side,
     reactions_align: Align,
-    max_frac: f32,
+    max_frac: Option<f32>,
     style_hook: StyleHook<BubbleStyle>,
+    sizing_hook: SizingHook<BubbleMetrics>,
 }
 
 impl Customize<BubbleStyle> for Bubble {
     fn style_hook_mut(&mut self) -> &mut StyleHook<BubbleStyle> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<BubbleMetrics> for Bubble {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<BubbleMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -184,8 +229,9 @@ impl Bubble {
             reactions: Vec::new(),
             reactions_side: Side::Bottom,
             reactions_align: Align::End,
-            max_frac: MAX_BUBBLE_FRAC,
+            max_frac: None,
             style_hook: StyleHook::default(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -219,7 +265,7 @@ impl Bubble {
     /// Override the max bubble width as a fraction of the row (default `0.8`;
     /// ignored for `ghost`, which is always full width).
     pub const fn max_frac(mut self, frac: f32) -> Self {
-        self.max_frac = frac;
+        self.max_frac = Some(frac);
         self
     }
 
@@ -228,14 +274,12 @@ impl Bubble {
         let tokens = Tokens::get(ui);
         let mut style = self.variant.style(tokens);
         std::mem::take(&mut self.style_hook).apply(&mut style);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let end = self.align == Align::End;
 
         let full = ui.available_width();
-        let max_w = if style.full_width {
-            full
-        } else {
-            full * self.max_frac
-        };
+        let frac = self.max_frac.unwrap_or(m.max_bubble_frac);
+        let max_w = if style.full_width { full } else { full * frac };
 
         // Lay the bubble in a full-width column so it can hug either edge.
         let layout = if end {
@@ -253,7 +297,7 @@ impl Bubble {
                     frame = frame.stroke(stroke);
                 }
                 frame = frame.inner_margin(if style.framed {
-                    Margin::symmetric(12, 8)
+                    Margin::symmetric(m.bubble_pad_x, m.bubble_pad_y)
                 } else {
                     Margin::ZERO
                 });
@@ -269,28 +313,28 @@ impl Bubble {
             .inner;
 
         if !self.reactions.is_empty() {
-            self.paint_reactions(ui, tokens, resp.rect);
+            self.paint_reactions(ui, tokens, m, resp.rect);
             // Reserve the overlap so following rows clear the reaction chips.
-            ui.add_space(REACTION_OVERLAP);
+            ui.add_space(m.reaction_overlap);
         }
 
         resp
     }
 
     /// Paint the reaction chips overlapping the chosen bubble edge.
-    fn paint_reactions(&self, ui: &Ui, tokens: Tokens, bubble: Rect) {
+    fn paint_reactions(&self, ui: &Ui, tokens: Tokens, m: BubbleMetrics, bubble: Rect) {
         let painter = ui.painter();
-        let font = FontId::proportional(12.5);
-        let height = 22.0;
-        let pad_x = 7.0;
-        let gap = 4.0;
+        let font = FontId::proportional(m.reaction_text);
+        let height = m.reaction_height;
+        let pad_x = m.reaction_pad_x;
+        let gap = m.reaction_gap;
 
         // Lay out each chip's galley and width.
         let mut chips = Vec::with_capacity(self.reactions.len());
         let mut total = 0.0;
         for r in &self.reactions {
             let g = painter.layout_no_wrap(r.clone(), font.clone(), tokens.foreground);
-            let w = g.size().x + pad_x * 2.0;
+            let w = pad_x.mul_add(2.0, g.size().x);
             chips.push((g, w));
             total += w;
         }
@@ -304,7 +348,7 @@ impl Bubble {
         };
         let top = center_y - height / 2.0;
 
-        let inset = 8.0;
+        let inset = m.reaction_inset;
         let mut x = if self.reactions_align == Align::End {
             bubble.right() - inset - total
         } else {
@@ -382,7 +426,9 @@ impl BubbleGroup {
     /// Render the grouped bubbles.
     pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> R {
         ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.y = self.gap.unwrap_or(4.0);
+            ui.spacing_mut().item_spacing.y = self
+                .gap
+                .unwrap_or_else(|| BubbleMetrics::default().group_gap);
             content(ui)
         })
         .inner
