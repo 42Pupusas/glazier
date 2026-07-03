@@ -24,23 +24,51 @@ use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::customize::{Customize, StyleHook};
 use crate::icon::Icon;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Item inner padding: `px-3 py-2`.
-const ITEM_PAD_X: f32 = 12.0;
-/// Row height (`h-8`).
-const ITEM_H: f32 = 32.0;
-/// Gap between rows (`gap-1`).
-const ITEM_GAP: f32 = 4.0;
-/// Gap between icon and label (`gap-2`).
-const ICON_GAP: f32 = 8.0;
-/// Item / label text size (`text-sm` / `text-xs`).
-const ITEM_TEXT: f32 = 13.0;
-const LABEL_TEXT: f32 = 12.0;
-/// Group padding (`p-2`).
-const GROUP_PAD: f32 = 8.0;
-/// Group-label row height (`h-8`).
-const LABEL_H: f32 = 32.0;
+/// Overridable geometry/timing for [`SidebarMenu`] — reach in via
+/// [`SidebarMenu::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct SidebarMenuMetrics {
+    /// Item inner padding (`px-3`).
+    pub item_pad_x: f32,
+    /// Row height (`h-8`).
+    pub item_h: f32,
+    /// Gap between rows (`gap-1`).
+    pub item_gap: f32,
+    /// Gap between icon and label (`gap-2`).
+    pub icon_gap: f32,
+    /// Item text size (`text-sm`).
+    pub item_text: f32,
+    /// Group-label / badge text size (`text-xs`).
+    pub label_text: f32,
+    /// Group padding (`p-2`).
+    pub group_pad: f32,
+    /// Group-label row height (`h-8`).
+    pub label_h: f32,
+    /// Leading icon edge length (`size-4`).
+    pub icon_size: f32,
+    /// Seconds for the hover accent transition.
+    pub hover_time: f32,
+}
+
+impl Default for SidebarMenuMetrics {
+    fn default() -> Self {
+        Self {
+            item_pad_x: 12.0,
+            item_h: 32.0,
+            item_gap: 4.0,
+            icon_gap: 8.0,
+            item_text: 13.0,
+            label_text: 12.0,
+            group_pad: 8.0,
+            label_h: 32.0,
+            icon_size: 16.0,
+            hover_time: 0.15,
+        }
+    }
+}
 
 /// One row of a [`SidebarMenu`].
 struct SidebarMenuItem {
@@ -59,11 +87,18 @@ pub struct SidebarMenu {
     items: Vec<SidebarMenuItem>,
     collapsed: bool,
     style_hook: StyleHook<egui::Frame>,
+    sizing_hook: SizingHook<SidebarMenuMetrics>,
 }
 
 impl Customize<egui::Frame> for SidebarMenu {
     fn style_hook_mut(&mut self) -> &mut StyleHook<egui::Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<SidebarMenuMetrics> for SidebarMenu {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<SidebarMenuMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -75,6 +110,7 @@ impl SidebarMenu {
             items: Vec::new(),
             collapsed: false,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -117,8 +153,9 @@ impl SidebarMenu {
     /// a row is clicked. Returns the index of the clicked item, if any.
     pub fn show(mut self, ui: &mut Ui, active: &mut usize) -> Option<usize> {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let mut clicked = None;
-        let mut frame = egui::Frame::new().inner_margin(GROUP_PAD);
+        let mut frame = egui::Frame::new().inner_margin(m.group_pad);
         std::mem::take(&mut self.style_hook).apply(&mut frame);
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -126,15 +163,15 @@ impl SidebarMenu {
 
             // Always reserve the label row height so items don't shift
             // when the sidebar collapses — only the text is hidden.
-            label_row(ui, tokens, &self.label, self.collapsed);
+            label_row(ui, tokens, m, &self.label, self.collapsed);
             for (i, item) in self.items.iter().enumerate() {
                 if i > 0 {
-                    ui.add_space(ITEM_GAP);
+                    ui.add_space(m.item_gap);
                 }
                 let resp = if self.collapsed {
-                    icon_row(ui, tokens, item, i == *active)
+                    icon_row(ui, tokens, m, item, i == *active)
                 } else {
-                    item_row(ui, tokens, item, i == *active)
+                    item_row(ui, tokens, m, item, i == *active)
                 };
                 if resp.clicked() {
                     *active = i;
@@ -149,36 +186,47 @@ impl SidebarMenu {
 /// A muted group label (`h-8 px-3 text-xs text-sidebar-foreground/70`).
 /// Space is always reserved; text is hidden when `hidden` (collapsed rail) to
 /// prevent items from jumping when the sidebar opens/closes.
-fn label_row(ui: &mut Ui, tokens: Tokens, text: &str, hidden: bool) {
+fn label_row(ui: &mut Ui, tokens: Tokens, m: SidebarMenuMetrics, text: &str, hidden: bool) {
     let (rect, _) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), LABEL_H), Sense::hover());
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), m.label_h), Sense::hover());
     if hidden || !ui.is_rect_visible(rect) {
         return;
     }
     let color = tokens.muted_foreground;
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
-        egui::FontId::new(LABEL_TEXT, crate::fonts::semibold(ui, LABEL_TEXT).family),
+        egui::FontId::new(
+            m.label_text,
+            crate::fonts::semibold(ui, m.label_text).family,
+        ),
         color,
     );
     let pos = egui::pos2(
-        rect.left() + ITEM_PAD_X,
+        rect.left() + m.item_pad_x,
         rect.center().y - galley.size().y / 2.0,
     );
     ui.painter().galley(pos, galley, color);
 }
 
 /// A clickable nav row: leading icon + label, accent fill when active/hovered.
-fn item_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool) -> Response {
+fn item_row(
+    ui: &mut Ui,
+    tokens: Tokens,
+    m: SidebarMenuMetrics,
+    item: &SidebarMenuItem,
+    is_active: bool,
+) -> Response {
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), ITEM_H), Sense::click());
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), m.item_h), Sense::click());
 
     if ui.is_rect_visible(rect) {
         // `data-active:bg-sidebar-accent` / `hover:bg-sidebar-accent`. The hover
         // lift eases with `transition-colors`; the active state stays solid.
-        let hover_t =
-            ui.ctx()
-                .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
+        let hover_t = ui.ctx().animate_bool_with_time(
+            response.id.with("hover"),
+            response.hovered(),
+            m.hover_time,
+        );
         let highlight_t = if is_active { 1.0 } else { hover_t };
         if highlight_t > 0.01 {
             ui.painter().rect(
@@ -194,9 +242,12 @@ fn item_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool
             .lerp_to_gamma(tokens.accent_foreground, highlight_t);
 
         // Leading icon (`size-4`), vertically centered with `px-3` inset.
-        let icon_size = 16.0;
+        let icon_size = m.icon_size;
         let icon_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + ITEM_PAD_X, rect.center().y - icon_size / 2.0),
+            egui::pos2(
+                rect.left() + m.item_pad_x,
+                rect.center().y - icon_size / 2.0,
+            ),
             Vec2::splat(icon_size),
         );
         Icon::new(item.icon)
@@ -209,17 +260,17 @@ fn item_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool
         // `truncate`) so a long label never spills past the `px-3` right inset
         // when the card is narrow.
         let font = if is_active {
-            egui::FontId::new(ITEM_TEXT, crate::fonts::semibold(ui, ITEM_TEXT).family)
+            egui::FontId::new(m.item_text, crate::fonts::semibold(ui, m.item_text).family)
         } else {
-            egui::FontId::proportional(ITEM_TEXT)
+            egui::FontId::proportional(m.item_text)
         };
-        let text_x = icon_rect.right() + ICON_GAP;
+        let text_x = icon_rect.right() + m.icon_gap;
         // A trailing badge pill (shadcn `SidebarMenuBadge`) reserves room on the
         // right so the label truncates before it rather than under it.
         let badge_w = item.badge.as_deref().map_or(0.0, |b| {
-            badge_pill(ui, tokens, rect, b, highlight_t) + ICON_GAP
+            badge_pill(ui, tokens, m, rect, b, highlight_t) + m.icon_gap
         });
-        let avail = (rect.right() - ITEM_PAD_X - badge_w - text_x).max(0.0);
+        let avail = (rect.right() - m.item_pad_x - badge_w - text_x).max(0.0);
         let mut job = egui::text::LayoutJob::simple(item.label.clone(), font, fg, avail);
         job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
         let galley = ui.painter().layout_job(job);
@@ -231,17 +282,25 @@ fn item_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool
 
 /// A collapsed (icon-rail) nav row: a centered icon button, no label, with the
 /// badge rendered as a small accent dot on the icon's top-right corner.
-fn icon_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool) -> Response {
+fn icon_row(
+    ui: &mut Ui,
+    tokens: Tokens,
+    m: SidebarMenuMetrics,
+    item: &SidebarMenuItem,
+    is_active: bool,
+) -> Response {
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), ITEM_H), Sense::click());
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), m.item_h), Sense::click());
 
     if ui.is_rect_visible(rect) {
-        let hover_t =
-            ui.ctx()
-                .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
+        let hover_t = ui.ctx().animate_bool_with_time(
+            response.id.with("hover"),
+            response.hovered(),
+            m.hover_time,
+        );
         let highlight_t = if is_active { 1.0 } else { hover_t };
         // The accent fill is a square button centered in the row (`size-8`).
-        let btn = egui::Rect::from_center_size(rect.center(), Vec2::splat(ITEM_H));
+        let btn = egui::Rect::from_center_size(rect.center(), Vec2::splat(m.item_h));
         if highlight_t > 0.01 {
             ui.painter().rect(
                 btn,
@@ -255,7 +314,7 @@ fn icon_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool
             .foreground
             .lerp_to_gamma(tokens.accent_foreground, highlight_t);
 
-        let icon_size = 16.0;
+        let icon_size = m.icon_size;
         let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
         Icon::new(item.icon)
             .size(icon_size)
@@ -274,15 +333,25 @@ fn icon_row(ui: &mut Ui, tokens: Tokens, item: &SidebarMenuItem, is_active: bool
 
 /// Paint a trailing count pill (shadcn `SidebarMenuBadge`) at the row's right
 /// inset; returns the pill width so the label can reserve room for it.
-fn badge_pill(ui: &Ui, tokens: Tokens, row: Rect, text: &str, highlight_t: f32) -> f32 {
-    let font = egui::FontId::new(LABEL_TEXT, crate::fonts::semibold(ui, LABEL_TEXT).family);
+fn badge_pill(
+    ui: &Ui,
+    tokens: Tokens,
+    m: SidebarMenuMetrics,
+    row: Rect,
+    text: &str,
+    highlight_t: f32,
+) -> f32 {
+    let font = egui::FontId::new(
+        m.label_text,
+        crate::fonts::semibold(ui, m.label_text).family,
+    );
     let fg = tokens
         .muted_foreground
         .lerp_to_gamma(tokens.accent_foreground, highlight_t);
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, fg);
     let pad = Vec2::new(6.0, 1.0);
     let size = galley.size() + pad * 2.0;
-    let center = egui::pos2(row.right() - ITEM_PAD_X - size.x / 2.0, row.center().y);
+    let center = egui::pos2(row.right() - m.item_pad_x - size.x / 2.0, row.center().y);
     let pill = egui::Rect::from_center_size(center, size);
     ui.painter().rect(
         pill,

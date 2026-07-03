@@ -123,7 +123,7 @@ pub use select::{Select, SelectMetrics};
 pub use separator::Separator;
 pub use sheet::Sheet;
 pub use sidebar::{Sidebar, SidebarTrigger};
-pub use sidebar_menu::SidebarMenu;
+pub use sidebar_menu::{SidebarMenu, SidebarMenuMetrics};
 pub use skeleton::Skeleton;
 pub use slider::{Slider, SliderMetrics};
 pub use sonner::{Toast, Toaster};
