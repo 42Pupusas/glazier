@@ -54,7 +54,7 @@ pub use components::{
     DropdownMenu, DropdownMenuMetrics, Empty, EmptyMetrics, Field, Grid, HoverCard,
     HoverCardMetrics, Icon, Input, InputGroup, InputGroupMetrics, InputMetrics, InputOtp,
     InputOtpMetrics, Item, Kbd, Label, Marker, MarkerMetrics, MarkerStyle, Menubar, MenubarMenu,
-    MenubarMetrics, Message, MessageGroup, MessageResponse, MessageScroller,
+    MenubarMetrics, Message, MessageGroup, MessageMetrics, MessageResponse, MessageScroller,
     MessageScrollerMetrics, NativeSelect, NativeSelectMetrics, NavItem, NavResponse,
     NavigationMenu, OtpMode, Pagination, PaginationMetrics, Popover, Progress, RadioGroup,
     RadioGroupMetrics, Resizable, ResizableMetrics, ResizableStyle, ScrollArea, Select,

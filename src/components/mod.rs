@@ -109,7 +109,7 @@ pub use kbd::Kbd;
 pub use label::Label;
 pub use marker::{Marker, MarkerMetrics, MarkerStyle};
 pub use menubar::{Menubar, MenubarMenu, MenubarMetrics};
-pub use message::{BubbleStyle, Message, MessageGroup, MessageResponse};
+pub use message::{BubbleStyle, Message, MessageGroup, MessageMetrics, MessageResponse};
 pub use message_scroller::{MessageScroller, MessageScrollerMetrics};
 pub use native_select::{NativeSelect, NativeSelectMetrics};
 pub use navigation_menu::{NavItem, NavResponse, NavigationMenu};

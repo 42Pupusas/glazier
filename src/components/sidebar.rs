@@ -183,7 +183,12 @@ impl<'a> Sidebar<'a> {
         let height = self.height.unwrap_or_else(|| ui.available_height());
 
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-        ui.set_clip_rect(ui.clip_rect().intersect(rect));
+        // Clamp painting to the panel, but remember the caller's clip: this
+        // `ui` may host siblings after us (e.g. the app's content column),
+        // and leaving the clip clamped would silently clip their paint and
+        // interact rects to the sidebar's rectangle.
+        let saved_clip = ui.clip_rect();
+        ui.set_clip_rect(saved_clip.intersect(rect));
 
         // Panel surface + right border (`border-r`).
         ui.painter().rect_filled(rect, 0.0, tokens.card);
@@ -296,6 +301,9 @@ impl<'a> Sidebar<'a> {
             collapsed = !collapsed;
             toggled = true;
         }
+
+        // Hand the caller's clip rect back before returning.
+        ui.set_clip_rect(saved_clip);
 
         ui.data_mut(|d| d.insert_temp(id, collapsed));
         SidebarResponse { collapsed, toggled }

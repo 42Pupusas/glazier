@@ -22,6 +22,7 @@ use egui::{Align, Color32, Frame, Rect, Response, RichText, Ui, Vec2};
 
 use crate::components::avatar::Avatar;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// The result of [`Message::show`].
@@ -37,12 +38,38 @@ pub struct MessageResponse {
     pub bubble_rect: Rect,
 }
 
-/// Gap between the avatar and the message column (shadcn `gap-2`).
-const AVATAR_GAP: f32 = 8.0;
-/// Vertical gap between header/bubble/footer (shadcn `gap-1`).
-const STACK_GAP: f32 = 4.0;
-/// Default fraction of the row width a bubble may occupy before wrapping.
-const MAX_BUBBLE_FRAC: f32 = 0.78;
+/// Overridable geometry for [`Message`] — reach in via [`Message::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct MessageMetrics {
+    /// Gap between the avatar and the message column (shadcn `gap-2`).
+    pub avatar_gap: f32,
+    /// Vertical gap between header/bubble/footer (shadcn `gap-1`).
+    pub stack_gap: f32,
+    /// Default fraction of the row width a bubble may occupy before wrapping.
+    pub max_bubble_frac: f32,
+    /// Header text size.
+    pub header_text: f32,
+    /// Footer text size.
+    pub footer_text: f32,
+    /// Bubble inner padding, horizontal.
+    pub bubble_pad_x: i8,
+    /// Bubble inner padding, vertical.
+    pub bubble_pad_y: i8,
+}
+
+impl Default for MessageMetrics {
+    fn default() -> Self {
+        Self {
+            avatar_gap: 8.0,
+            stack_gap: 4.0,
+            max_bubble_frac: 0.78,
+            header_text: 12.0,
+            footer_text: 11.0,
+            bubble_pad_x: 12,
+            bubble_pad_y: 8,
+        }
+    }
+}
 
 /// Which side of the conversation a [`Message`] sits on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -84,6 +111,7 @@ pub struct Message {
     footer: Option<String>,
     max_bubble_frac: Option<f32>,
     style_hook: StyleHook<BubbleStyle>,
+    sizing_hook: SizingHook<MessageMetrics>,
 }
 
 /// [`Message`]'s resolved bubble paint — fill and text colour. The real value
@@ -99,6 +127,12 @@ pub struct BubbleStyle {
 impl Customize<BubbleStyle> for Message {
     fn style_hook_mut(&mut self) -> &mut StyleHook<BubbleStyle> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<MessageMetrics> for Message {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<MessageMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -148,8 +182,9 @@ impl Message {
     }
 
     /// Render the message, drawing `content` inside the bubble surface.
-    pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> MessageResponse {
+    pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> MessageResponse {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let end = self.align == Side::End;
 
         let mut style = if end {
@@ -171,14 +206,14 @@ impl Message {
 
         let avatar_d = self.avatar.as_ref().map_or(0.0, Avatar::diameter_value);
         let avatar_slot = if self.avatar.is_some() {
-            avatar_d + AVATAR_GAP
+            avatar_d + m.avatar_gap
         } else {
             0.0
         };
 
         let total_w = ui.available_width();
         let max_bubble = total_w.mul_add(
-            self.max_bubble_frac.unwrap_or(MAX_BUBBLE_FRAC),
+            self.max_bubble_frac.unwrap_or(m.max_bubble_frac),
             -avatar_slot,
         );
 
@@ -187,7 +222,7 @@ impl Message {
         let mut avatar_x = ui.cursor().left();
 
         let inner = ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = AVATAR_GAP;
+            ui.spacing_mut().item_spacing.x = m.avatar_gap;
 
             // Reserve the avatar column on the leading side for start rows. We
             // only claim the horizontal slot here; the circle is painted later,
@@ -205,7 +240,7 @@ impl Message {
                 egui::Layout::top_down(Align::Min)
             };
             ui.allocate_ui_with_layout(Vec2::new(col_w, 0.0), layout, |ui| {
-                ui.spacing_mut().item_spacing.y = STACK_GAP;
+                ui.spacing_mut().item_spacing.y = m.stack_gap;
 
                 // Header: muted sender name, always start-aligned.
                 if let Some(header) = &self.header {
@@ -213,7 +248,7 @@ impl Message {
                         ui.label(
                             RichText::new(header)
                                 .color(tokens.muted_foreground)
-                                .size(12.0),
+                                .size(m.header_text),
                         );
                     });
                 }
@@ -222,7 +257,7 @@ impl Message {
                 let bubble = Frame::new()
                     .fill(fill)
                     .corner_radius(tokens.radius_lg())
-                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .inner_margin(egui::Margin::symmetric(m.bubble_pad_x, m.bubble_pad_y))
                     .show(ui, |ui| {
                         ui.style_mut().visuals.override_text_color = Some(text_color);
                         // Message text reads like a transcript — let it be
@@ -254,7 +289,7 @@ impl Message {
                     ui.label(
                         RichText::new(footer)
                             .color(tokens.muted_foreground)
-                            .size(11.0),
+                            .size(m.footer_text),
                     );
                 }
             });
@@ -316,7 +351,9 @@ impl MessageGroup {
     /// Render the grouped messages.
     pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> R {
         ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.y = self.gap.unwrap_or(STACK_GAP);
+            ui.spacing_mut().item_spacing.y = self
+                .gap
+                .unwrap_or_else(|| MessageMetrics::default().stack_gap);
             content(ui)
         })
         .inner
