@@ -59,10 +59,11 @@ pub use components::{
     NavResponse, NavigationMenu, OtpMode, Pagination, PaginationMetrics, Popover, Progress,
     RadioGroup, RadioGroupMetrics, Resizable, ResizableMetrics, ResizableStyle, ScrollArea, Select,
     SelectMetrics, Separator, Sheet, SheetMetrics, Sidebar, SidebarMenu, SidebarMenuMetrics,
-    SidebarTrigger, Sizing, Skeleton, Slider, SliderMetrics, Spinner, SpinnerMetrics, SpinnerStyle,
-    Switch, SwitchMetrics, Table, TableMetrics, Tabs, TabsMetrics, TabsResponse, Textarea, Time,
-    TimePicker, TimePickerMetrics, Toast, Toaster, Toggle, ToggleGroup, ToggleGroupMetrics,
-    ToggleMetrics, Tooltip, TooltipMetrics, Typography, TypographyMetrics,
+    SidebarTrigger, Sizing, Skeleton, Slider, SliderMetrics, SonnerMetrics, Spinner,
+    SpinnerMetrics, SpinnerStyle, Switch, SwitchMetrics, Table, TableMetrics, Tabs, TabsMetrics,
+    TabsResponse, Textarea, Time, TimePicker, TimePickerMetrics, Toast, Toaster, Toggle,
+    ToggleGroup, ToggleGroupMetrics, ToggleMetrics, Tooltip, TooltipMetrics, Typography,
+    TypographyMetrics,
 };
 pub use customize::{Customize, StyleHook};
 pub use decorate::{Decorate, Styled};

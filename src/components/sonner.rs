@@ -35,26 +35,48 @@ use egui::{Align2, Area, Color32, Frame, Margin, Order, Sense, Stroke, Ui, Vec2,
 
 use crate::components::icon::Icon;
 use crate::fonts;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Default seconds a toast stays before auto-dismissing (Sonner uses 4s).
-const DEFAULT_DURATION: f32 = 4.0;
-/// Enter / exit tween duration.
-const ANIM_SECS: f32 = 0.35;
-/// Collapse ⇆ expand tween duration.
-const EXPAND_SECS: f32 = 0.22;
-/// Toast card width (Sonner default 356px).
-const WIDTH: f32 = 356.0;
-/// Gap between cards when the stack is expanded.
-const GAP: f32 = 14.0;
-/// How far each deeper card peeks out when the stack is collapsed.
-const PEEK: f32 = 16.0;
-/// Scale shed per depth level when collapsed (so card 1 is 0.94×, etc.).
-const SCALE_STEP: f32 = 0.05;
-/// Inset from the screen corner.
-const SCREEN_PAD: f32 = 24.0;
-/// How many toasts render at full presence before the rest fade behind.
-const MAX_VISIBLE: usize = 3;
+/// Overridable geometry/timing for [`Toaster`] (and [`Toast`]'s default
+/// duration) — reach in via [`Toaster::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct SonnerMetrics {
+    /// Default seconds a toast stays before auto-dismissing (Sonner uses 4s).
+    pub default_duration: f32,
+    /// Enter / exit tween duration.
+    pub anim_secs: f32,
+    /// Collapse ⇆ expand tween duration.
+    pub expand_secs: f32,
+    /// Toast card width (Sonner default 356px).
+    pub width: f32,
+    /// Gap between cards when the stack is expanded.
+    pub gap: f32,
+    /// How far each deeper card peeks out when the stack is collapsed.
+    pub peek: f32,
+    /// Scale shed per depth level when collapsed (so card 1 is 0.94×, etc.).
+    pub scale_step: f32,
+    /// Inset from the screen corner.
+    pub screen_pad: f32,
+    /// How many toasts render at full presence before the rest fade behind.
+    pub max_visible: usize,
+}
+
+impl Default for SonnerMetrics {
+    fn default() -> Self {
+        Self {
+            default_duration: 4.0,
+            anim_secs: 0.35,
+            expand_secs: 0.22,
+            width: 356.0,
+            gap: 14.0,
+            peek: 16.0,
+            scale_step: 0.05,
+            screen_pad: 24.0,
+            max_visible: 3,
+        }
+    }
+}
 
 /// Semantic style of a [`Toast`], mirroring Sonner's variants.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -145,7 +167,7 @@ impl Toast {
             title: title.into(),
             description: None,
             variant: Variant::Default,
-            duration: DEFAULT_DURATION,
+            duration: SonnerMetrics::default().default_duration,
             corner: None,
         }
     }
@@ -251,13 +273,21 @@ struct LiveToast {
 #[must_use = "toasters do nothing unless shown"]
 pub struct Toaster {
     corner: Corner,
+    sizing_hook: SizingHook<SonnerMetrics>,
 }
 
 impl Default for Toaster {
     fn default() -> Self {
         Self {
             corner: Corner::BottomRight,
+            sizing_hook: SizingHook::new(),
         }
+    }
+}
+
+impl Sizeable<SonnerMetrics> for Toaster {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<SonnerMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -275,7 +305,8 @@ impl Toaster {
 
     /// Render the queue once: collapse/expand, animate, auto-dismiss, draw close
     /// buttons. Call once per frame, after the rest of your UI.
-    pub fn show(self, ctx: &egui::Context) {
+    pub fn show(mut self, ctx: &egui::Context) {
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         // Publish this toaster's default corner so `Toast::send` (which has no
         // toaster) can freeze it onto new toasts.
         ctx.data_mut(|d| d.insert_temp(default_corner_id(), self.corner));
@@ -312,7 +343,7 @@ impl Toaster {
 
             // Per-corner hover → expand factor (smooth, also gates the timers).
             let hovered = ctx.data_mut(|d| d.get_temp::<bool>(hover_id(corner)).unwrap_or(false));
-            let expand = ctx.animate_bool_with_time(expand_anim_id(corner), hovered, EXPAND_SECS);
+            let expand = ctx.animate_bool_with_time(expand_anim_id(corner), hovered, m.expand_secs);
 
             // Advance auto-dismiss timers, paused while expanded (hovered).
             if expand < 0.5 {
@@ -335,7 +366,7 @@ impl Toaster {
                 expanded_lift[depth] = acc;
                 let id = queue[members[count - 1 - depth]].id;
                 let h = new_heights.get(&id).copied().unwrap_or(64.0);
-                acc += h + GAP;
+                acc += h + m.gap;
             }
             let stack_extent = acc;
 
@@ -349,7 +380,7 @@ impl Toaster {
                     expanded_lift: expanded_lift[depth],
                     now,
                 };
-                let out = render_card(ctx, tokens, t, geo);
+                let out = render_card(ctx, tokens, m, t, geo);
                 new_heights.insert(t.id, out.height);
                 if out.closed {
                     closed_ids.push(t.id);
@@ -368,7 +399,7 @@ impl Toaster {
             // oscillate.
             let any_hovered = ctx
                 .pointer_hover_pos()
-                .is_some_and(|p| stack_bounds(ctx, corner, stack_extent).contains(p));
+                .is_some_and(|p| stack_bounds(ctx, m, corner, stack_extent).contains(p));
             ctx.data_mut(|d| d.insert_temp(hover_id(corner), any_hovered));
         }
 
@@ -413,7 +444,13 @@ struct CardOut {
 }
 
 /// Render one toast card with its stack transform and enter/exit tween.
-fn render_card(ctx: &egui::Context, tokens: Tokens, t: &LiveToast, geo: CardGeom) -> CardOut {
+fn render_card(
+    ctx: &egui::Context,
+    tokens: Tokens,
+    m: SonnerMetrics,
+    t: &LiveToast,
+    geo: CardGeom,
+) -> CardOut {
     let CardGeom {
         corner,
         depth,
@@ -423,9 +460,9 @@ fn render_card(ctx: &egui::Context, tokens: Tokens, t: &LiveToast, geo: CardGeom
     } = geo;
 
     // Enter (0→1) is born-driven; exit (1→0) starts at `dismissed`.
-    let enter = (now.duration_since(t.born).as_secs_f32() / ANIM_SECS).clamp(0.0, 1.0);
+    let enter = (now.duration_since(t.born).as_secs_f32() / m.anim_secs).clamp(0.0, 1.0);
     let (life, finished) = t.dismissed.map_or((enter, false), |d| {
-        let exit = (now.duration_since(d).as_secs_f32() / ANIM_SECS).clamp(0.0, 1.0);
+        let exit = (now.duration_since(d).as_secs_f32() / m.anim_secs).clamp(0.0, 1.0);
         (1.0 - exit, exit >= 1.0)
     });
     let life_eased = ease_out_cubic(life);
@@ -433,15 +470,15 @@ fn render_card(ctx: &egui::Context, tokens: Tokens, t: &LiveToast, geo: CardGeom
     // Collapsed vs expanded geometry, blended by `expand`.
     #[allow(clippy::cast_precision_loss)]
     let d = depth as f32;
-    let collapsed_lift = d * PEEK;
+    let collapsed_lift = d * m.peek;
     let stack_lift = lerp(collapsed_lift, expanded_lift, expand);
-    let collapsed_scale = SCALE_STEP.mul_add(-d, 1.0).max(0.5);
+    let collapsed_scale = m.scale_step.mul_add(-d, 1.0).max(0.5);
     let scale = lerp(collapsed_scale, 1.0, expand);
 
     // Cards beyond the visible count fade out behind the stack when collapsed.
     #[allow(clippy::cast_precision_loss)]
-    let visible_edge = (MAX_VISIBLE - 1) as f32;
-    let depth_alpha = if depth < MAX_VISIBLE {
+    let visible_edge = (m.max_visible - 1) as f32;
+    let depth_alpha = if depth < m.max_visible {
         1.0
     } else {
         (d - visible_edge).mul_add(-0.5, 1.0).max(0.0)
@@ -452,12 +489,12 @@ fn render_card(ctx: &egui::Context, tokens: Tokens, t: &LiveToast, geo: CardGeom
     // Anchor the card's corner inside the screen position, lifted by `stack_lift`.
     let sign = if corner.is_top() { 1.0 } else { -1.0 };
     let hx = corner.h_dir();
-    let offset = Vec2::new(hx * SCREEN_PAD, sign * (SCREEN_PAD + stack_lift));
+    let offset = Vec2::new(hx * m.screen_pad, sign * (m.screen_pad + stack_lift));
 
     // The card's anchored outer corner, in screen space — the pivot for scaling
     // (bottom-/top-center so cards shrink toward the stack's centre line).
     let corner_pt = corner.align().pos_in_rect(&ctx.content_rect()) + offset;
-    let pivot_x = (hx * WIDTH).mul_add(0.5, corner_pt.x);
+    let pivot_x = (hx * m.width).mul_add(0.5, corner_pt.x);
     let pivot = egui::pos2(pivot_x, corner_pt.y);
 
     // Enter slide: cards arrive from just outside the anchored edge.
@@ -475,9 +512,9 @@ fn render_card(ctx: &egui::Context, tokens: Tokens, t: &LiveToast, geo: CardGeom
         .interactable(true)
         .show(ctx, |ui| {
             ui.set_opacity(alpha);
-            ui.set_width(WIDTH);
+            ui.set_width(m.width);
             ui.with_visual_transform(transform, |ui| {
-                closed = card_body(ui, tokens, t);
+                closed = card_body(ui, tokens, m, t);
             });
         });
 
@@ -494,10 +531,10 @@ fn render_card(ctx: &egui::Context, tokens: Tokens, t: &LiveToast, geo: CardGeom
 /// the region is forgiving at the edges. Using the larger expanded height (never
 /// the collapsed one) keeps the hover test independent of the animation state,
 /// which is what stops the expand/collapse oscillation.
-fn stack_bounds(ctx: &egui::Context, corner: Corner, extent: f32) -> egui::Rect {
+fn stack_bounds(ctx: &egui::Context, m: SonnerMetrics, corner: Corner, extent: f32) -> egui::Rect {
     let screen = ctx.content_rect();
-    let height = extent.max(72.0) + SCREEN_PAD;
-    let width = WIDTH + SCREEN_PAD;
+    let height = extent.max(72.0) + m.screen_pad;
+    let width = m.width + m.screen_pad;
     let hx = corner.h_dir();
     let left = if hx > 0.0 {
         screen.left()
@@ -519,7 +556,7 @@ fn stack_bounds(ctx: &egui::Context, corner: Corner, extent: f32) -> egui::Rect 
 /// Uses the opaque `widget` (popover) token — a toast is a floating overlay,
 /// not a static container, and `background` may be translucent under a user
 /// theme.
-fn card_body(ui: &mut Ui, tokens: Tokens, t: &LiveToast) -> bool {
+fn card_body(ui: &mut Ui, tokens: Tokens, m: SonnerMetrics, t: &LiveToast) -> bool {
     let frame = Frame::new()
         .fill(tokens.widget)
         .stroke(Stroke::new(1.0, tokens.border))
@@ -544,7 +581,7 @@ fn card_body(ui: &mut Ui, tokens: Tokens, t: &LiveToast) -> bool {
 
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
-                ui.set_width(WIDTH - 96.0);
+                ui.set_width(m.width - 96.0);
                 ui.label(
                     egui::RichText::new(&t.title)
                         .font(fonts::semibold(ui, 13.5))

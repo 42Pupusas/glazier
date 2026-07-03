@@ -126,7 +126,7 @@ pub use sidebar::{Sidebar, SidebarTrigger};
 pub use sidebar_menu::{SidebarMenu, SidebarMenuMetrics};
 pub use skeleton::Skeleton;
 pub use slider::{Slider, SliderMetrics};
-pub use sonner::{Toast, Toaster};
+pub use sonner::{SonnerMetrics, Toast, Toaster};
 pub use spinner::{Spinner, SpinnerMetrics, SpinnerStyle};
 pub use switch::{Switch, SwitchMetrics};
 pub use table::{Sizing, Table, TableMetrics};
