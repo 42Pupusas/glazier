@@ -34,24 +34,48 @@
 use egui::{Align, Id, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2};
 
 use crate::icon::Icon;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Default expanded width (`w-64`).
-const EXPANDED_W: f32 = 256.0;
-/// Default collapsed icon-rail width (`w-[--sidebar-width-icon]` ≈ `w-12`+pad).
-const COLLAPSED_W: f32 = 56.0;
-/// Collapse animation duration (seconds).
-const ANIM: f32 = 0.18;
-/// Inner padding (`p-2`).
-const PAD: f32 = 8.0;
-/// Public re-export of the sidebar's inner padding so content widgets can
-/// use [`ScrollArea::right_bleed`](crate::scroll_area::ScrollArea::right_bleed)
-/// to push their scrollbar flush with the panel border.
-pub const SIDEBAR_PAD: f32 = PAD;
-/// Trigger / header-row height (`h-11`).
-const TRIGGER_H: f32 = 44.0;
-/// Edge-rail hover-zone width.
-const RAIL_W: f32 = 14.0;
+/// Overridable geometry/timing for [`Sidebar`] — reach in via
+/// [`Sidebar::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct SidebarMetrics {
+    /// Default expanded width (`w-64`).
+    pub expanded_w: f32,
+    /// Default collapsed icon-rail width (`w-[--sidebar-width-icon]` ≈
+    /// `w-12`+pad).
+    pub collapsed_w: f32,
+    /// Collapse animation duration (seconds).
+    pub anim: f32,
+    /// Inner padding (`p-2`).
+    pub pad: f32,
+    /// Trigger / header-row height (`h-11`).
+    pub trigger_h: f32,
+    /// Edge-rail hover-zone width.
+    pub rail_w: f32,
+}
+
+impl Default for SidebarMetrics {
+    fn default() -> Self {
+        Self {
+            expanded_w: 256.0,
+            collapsed_w: 56.0,
+            anim: 0.18,
+            pad: 8.0,
+            trigger_h: 44.0,
+            rail_w: 14.0,
+        }
+    }
+}
+
+/// Sidebar inner padding, matching [`SidebarMetrics::default`]'s `pad`.
+///
+/// Public so content widgets can use
+/// [`ScrollArea::right_bleed`](crate::scroll_area::ScrollArea::right_bleed) to
+/// push their scrollbar flush with the panel border. If you override `pad`
+/// via [`Sidebar::sizing`], use that value instead of this constant.
+pub const SIDEBAR_PAD: f32 = 8.0;
 
 /// Lucide `panel-left` glyph used by the built-in trigger.
 const PANEL_LEFT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>"#;
@@ -90,14 +114,21 @@ type ExtraFn<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
 #[must_use = "sidebars do nothing unless you show them"]
 pub struct Sidebar<'a> {
     id_salt: String,
-    expanded_w: f32,
-    collapsed_w: f32,
+    expanded_w: Option<f32>,
+    collapsed_w: Option<f32>,
     height: Option<f32>,
     trigger: bool,
     rail: bool,
     trigger_extra: Option<ExtraFn<'a>>,
     header: Option<SectionFn<'a>>,
     footer: Option<SectionFn<'a>>,
+    sizing_hook: SizingHook<SidebarMetrics>,
+}
+
+impl Sizeable<SidebarMetrics> for Sidebar<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<SidebarMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> Sidebar<'a> {
@@ -105,26 +136,27 @@ impl<'a> Sidebar<'a> {
     pub fn new(id_salt: impl Into<String>) -> Self {
         Self {
             id_salt: id_salt.into(),
-            expanded_w: EXPANDED_W,
-            collapsed_w: COLLAPSED_W,
+            expanded_w: None,
+            collapsed_w: None,
             height: None,
             trigger: true,
             rail: true,
             trigger_extra: None,
             header: None,
             footer: None,
+            sizing_hook: SizingHook::new(),
         }
     }
 
     /// Set the expanded width (default 256).
     pub const fn expanded_width(mut self, w: f32) -> Self {
-        self.expanded_w = w;
+        self.expanded_w = Some(w);
         self
     }
 
     /// Set the collapsed icon-rail width (default 56).
     pub const fn collapsed_width(mut self, w: f32) -> Self {
-        self.collapsed_w = w;
+        self.collapsed_w = Some(w);
         self
     }
 
@@ -169,8 +201,11 @@ impl<'a> Sidebar<'a> {
     /// Render the sidebar; `body` fills the scrollable middle (receives
     /// `collapsed`).
     #[allow(clippy::too_many_lines)] // one linear header/body/footer paint pass; splitting fragments the shared collapse state
-    pub fn show(self, ui: &mut Ui, body: impl FnOnce(&mut Ui, bool)) -> SidebarResponse {
+    pub fn show(mut self, ui: &mut Ui, body: impl FnOnce(&mut Ui, bool)) -> SidebarResponse {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
+        let expanded_w = self.expanded_w.unwrap_or(m.expanded_w);
+        let collapsed_w = self.collapsed_w.unwrap_or(m.collapsed_w);
         let id = state_id(&self.id_salt);
         let mut collapsed: bool = ui.data(|d| d.get_temp(id).unwrap_or(false));
         let mut toggled = false;
@@ -178,8 +213,8 @@ impl<'a> Sidebar<'a> {
         // Animated width: 0 = expanded, 1 = collapsed.
         let t = ui
             .ctx()
-            .animate_bool_with_time(id.with("anim"), collapsed, ANIM);
-        let width = egui::lerp(self.expanded_w..=self.collapsed_w, t);
+            .animate_bool_with_time(id.with("anim"), collapsed, m.anim);
+        let width = egui::lerp(expanded_w..=collapsed_w, t);
         let height = self.height.unwrap_or_else(|| ui.available_height());
 
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
@@ -198,7 +233,7 @@ impl<'a> Sidebar<'a> {
             Stroke::new(1.0, tokens.border),
         );
 
-        let inner = rect.shrink(PAD);
+        let inner = rect.shrink(m.pad);
         let mut top = inner.top();
         let mut bottom = inner.bottom();
 
@@ -206,9 +241,9 @@ impl<'a> Sidebar<'a> {
         if self.trigger {
             let trow = Rect::from_min_max(
                 egui::pos2(inner.left(), top),
-                egui::pos2(inner.right(), top + TRIGGER_H),
+                egui::pos2(inner.right(), top + m.trigger_h),
             );
-            if trigger_button(ui, tokens, trow).clicked() {
+            if trigger_button(ui, tokens, m, trow).clicked() {
                 collapsed = !collapsed;
                 toggled = true;
             }
@@ -220,7 +255,7 @@ impl<'a> Sidebar<'a> {
                     // the extra widget. Give it the full height so the widget
                     // can centre itself vertically as it likes.
                     let extra_rect = Rect::from_min_max(
-                        egui::pos2(inner.left() + TRIGGER_H, trow.top()),
+                        egui::pos2(inner.left() + m.trigger_h, trow.top()),
                         egui::pos2(inner.right(), trow.bottom()),
                     );
                     let mut child = ui.new_child(
@@ -231,7 +266,7 @@ impl<'a> Sidebar<'a> {
                     extra(&mut child);
                 }
             }
-            top += TRIGGER_H;
+            top += m.trigger_h;
         }
 
         // Header (pinned, auto height).
@@ -269,7 +304,7 @@ impl<'a> Sidebar<'a> {
             if fh > 0.0 {
                 ui.painter().hline(
                     inner.left()..=inner.right(),
-                    bottom - PAD / 2.0,
+                    bottom - m.pad / 2.0,
                     Stroke::new(1.0, tokens.border.gamma_multiply(0.7)),
                 );
             }
@@ -277,8 +312,8 @@ impl<'a> Sidebar<'a> {
 
         // Scrollable middle.
         let mid = Rect::from_min_max(
-            egui::pos2(inner.left(), top + PAD / 2.0),
-            egui::pos2(inner.right(), bottom - PAD / 2.0),
+            egui::pos2(inner.left(), top + m.pad / 2.0),
+            egui::pos2(inner.right(), bottom - m.pad / 2.0),
         );
         if mid.height() > 1.0 {
             let mut child = ui.new_child(
@@ -297,7 +332,7 @@ impl<'a> Sidebar<'a> {
         }
 
         // Edge rail: a thin click-to-toggle strip on the panel's right edge.
-        if self.rail && edge_rail(ui, tokens, rect, id) {
+        if self.rail && edge_rail(ui, tokens, m, rect, id) {
             collapsed = !collapsed;
             toggled = true;
         }
@@ -337,7 +372,8 @@ impl SidebarTrigger {
 impl egui::Widget for SidebarTrigger {
     fn ui(self, ui: &mut Ui) -> egui::Response {
         let tokens = Tokens::get(ui);
-        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(TRIGGER_H * 0.8), Sense::click());
+        let trigger_h = SidebarMetrics::default().trigger_h;
+        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(trigger_h * 0.8), Sense::click());
         paint_trigger(ui, tokens, rect, resp.hovered());
         if resp.clicked() {
             toggle(ui, &self.id_salt);
@@ -347,10 +383,10 @@ impl egui::Widget for SidebarTrigger {
 }
 
 /// Render the built-in trigger inside the panel; returns its response.
-fn trigger_button(ui: &Ui, tokens: Tokens, row: Rect) -> egui::Response {
+fn trigger_button(ui: &Ui, tokens: Tokens, m: SidebarMetrics, row: Rect) -> egui::Response {
     let btn = Rect::from_min_size(
-        egui::pos2(row.left(), TRIGGER_H.mul_add(-0.4, row.center().y)),
-        Vec2::splat(TRIGGER_H * 0.8),
+        egui::pos2(row.left(), m.trigger_h.mul_add(-0.4, row.center().y)),
+        Vec2::splat(m.trigger_h * 0.8),
     );
     let resp = ui
         .interact(btn, ui.id().with("sb-trigger"), Sense::click())
@@ -360,10 +396,10 @@ fn trigger_button(ui: &Ui, tokens: Tokens, row: Rect) -> egui::Response {
 }
 
 /// The click-to-toggle edge rail; returns whether it was clicked this frame.
-fn edge_rail(ui: &Ui, tokens: Tokens, rect: Rect, id: Id) -> bool {
+fn edge_rail(ui: &Ui, tokens: Tokens, m: SidebarMetrics, rect: Rect, id: Id) -> bool {
     let rail_rect = Rect::from_min_max(
-        egui::pos2(rect.right() - RAIL_W / 2.0, rect.top()),
-        egui::pos2(rect.right() + RAIL_W / 2.0, rect.bottom()),
+        egui::pos2(rect.right() - m.rail_w / 2.0, rect.top()),
+        egui::pos2(rect.right() + m.rail_w / 2.0, rect.bottom()),
     );
     let resp = ui
         .interact(rail_rect, id.with("rail"), Sense::click())

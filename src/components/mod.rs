@@ -122,7 +122,7 @@ pub use scroll_area::ScrollArea;
 pub use select::{Select, SelectMetrics};
 pub use separator::Separator;
 pub use sheet::{Sheet, SheetMetrics};
-pub use sidebar::{Sidebar, SidebarTrigger};
+pub use sidebar::{Sidebar, SidebarMetrics, SidebarTrigger};
 pub use sidebar_menu::{SidebarMenu, SidebarMenuMetrics};
 pub use skeleton::Skeleton;
 pub use slider::{Slider, SliderMetrics};
