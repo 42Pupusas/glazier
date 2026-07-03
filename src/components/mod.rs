@@ -95,7 +95,7 @@ pub use data_table::{DataColumn, DataTable, DataTableMetrics};
 pub use date_picker::{DatePicker, DatePickerMetrics};
 pub use dialog::Dialog;
 pub use drawer::{Drawer, DrawerMetrics};
-pub use dropdown_menu::DropdownMenu;
+pub use dropdown_menu::{DropdownMenu, DropdownMenuMetrics};
 pub use empty::{Empty, EmptyMetrics};
 pub use field::Field;
 pub use grid::Grid;
