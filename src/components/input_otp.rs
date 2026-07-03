@@ -26,18 +26,35 @@
 
 use egui::{Event, Key, Modifiers, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Cell edge length (`size-10` ≈ 40px, trimmed for egui density).
-const CELL: f32 = 38.0;
-/// Gap between adjacent cells within a group.
-const CELL_GAP: f32 = 8.0;
-/// Gap between groups of cells (where a separator sits).
-const GROUP_GAP: f32 = 12.0;
-/// Separator dash half-width.
-const SEP_W: f32 = 6.0;
-/// Cell glyph size (`text-sm`+).
-const TEXT: f32 = 18.0;
+/// Overridable geometry for [`InputOtp`] — reach in via [`InputOtp::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct InputOtpMetrics {
+    /// Cell edge length (`size-10` ≈ 40px, trimmed for egui density).
+    pub cell: f32,
+    /// Gap between adjacent cells within a group.
+    pub cell_gap: f32,
+    /// Gap between groups of cells (where a separator sits).
+    pub group_gap: f32,
+    /// Separator dash half-width.
+    pub sep_w: f32,
+    /// Cell glyph size (`text-sm`+).
+    pub text: f32,
+}
+
+impl Default for InputOtpMetrics {
+    fn default() -> Self {
+        Self {
+            cell: 38.0,
+            cell_gap: 8.0,
+            group_gap: 12.0,
+            sep_w: 6.0,
+            text: 18.0,
+        }
+    }
+}
 
 /// Which characters an [`InputOtp`] accepts, mirroring shadcn's three
 /// `input-otp` regex presets (`REGEXP_ONLY_DIGITS`, `…_ONLY_CHARS`,
@@ -81,6 +98,13 @@ pub struct InputOtp<'a> {
     group: Option<usize>,
     mode: OtpMode,
     id_salt: egui::Id,
+    sizing_hook: SizingHook<InputOtpMetrics>,
+}
+
+impl Sizeable<InputOtpMetrics> for InputOtp<'_> {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<InputOtpMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl<'a> InputOtp<'a> {
@@ -92,6 +116,7 @@ impl<'a> InputOtp<'a> {
             group: None,
             mode: OtpMode::Digits,
             id_salt: egui::Id::new("glazier-input-otp"),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -132,8 +157,9 @@ impl<'a> InputOtp<'a> {
 
     /// Render the field. Returns `true` the frame the code becomes complete
     /// (all `len` cells filled).
-    pub fn show(self, ui: &mut Ui) -> bool {
+    pub fn show(mut self, ui: &mut Ui) -> bool {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let id = ui.make_persistent_id(self.id_salt);
 
         // Normalise the bound string: keep only accepted chars, clamp to len.
@@ -148,16 +174,17 @@ impl<'a> InputOtp<'a> {
         // Geometry: cells, plus a gap wherever a group boundary falls.
         let group = self.group.filter(|&g| g > 0);
         let n_seps = group.map_or(0, |g| self.len.saturating_sub(1) / g);
-        let sep_gap = 2.0_f32.mul_add(SEP_W, GROUP_GAP);
-        // Inner gaps: a `sep_gap` at each group boundary, a `CELL_GAP` between
+        let sep_gap = 2.0_f32.mul_add(m.sep_w, m.group_gap);
+        // Inner gaps: a `sep_gap` at each group boundary, a `cell_gap` between
         // every other pair of adjacent cells.
         let n_cell_gaps = self.len.saturating_sub(1).saturating_sub(n_seps);
         #[allow(clippy::cast_precision_loss)]
         let total_w = (self.len as f32).mul_add(
-            CELL,
-            (n_seps as f32).mul_add(sep_gap, n_cell_gaps as f32 * CELL_GAP),
+            m.cell,
+            (n_seps as f32).mul_add(sep_gap, n_cell_gaps as f32 * m.cell_gap),
         );
-        let (rect, mut response) = ui.allocate_exact_size(Vec2::new(total_w, CELL), Sense::click());
+        let (rect, mut response) =
+            ui.allocate_exact_size(Vec2::new(total_w, m.cell), Sense::click());
         let focused = response.has_focus();
 
         let mut state: OtpState = ui.data(|d| d.get_temp(id).unwrap_or_default());
@@ -171,14 +198,14 @@ impl<'a> InputOtp<'a> {
                 x += if group.is_some_and(|g| i % g == 0) {
                     sep_gap
                 } else {
-                    CELL_GAP
+                    m.cell_gap
                 };
             }
             cell_rects.push(egui::Rect::from_min_size(
                 egui::pos2(x, rect.top()),
-                Vec2::splat(CELL),
+                Vec2::splat(m.cell),
             ));
-            x += CELL;
+            x += m.cell;
         }
 
         // Click a cell to focus and place the caret there (clamped to the first
@@ -220,7 +247,7 @@ impl<'a> InputOtp<'a> {
         }
 
         if ui.is_rect_visible(rect) {
-            self.paint(ui, tokens, &cell_rects, &chars, state, focused, sep_gap);
+            self.paint(ui, tokens, m, &cell_rects, &chars, state, focused, sep_gap);
         }
 
         ui.data_mut(|d| d.insert_temp(id, state));
@@ -239,6 +266,7 @@ impl<'a> InputOtp<'a> {
         &self,
         ui: &Ui,
         tokens: Tokens,
+        m: InputOtpMetrics,
         cell_rects: &[egui::Rect],
         chars: &[char],
         state: OtpState,
@@ -250,6 +278,7 @@ impl<'a> InputOtp<'a> {
             paint_cell(
                 ui,
                 tokens,
+                m,
                 *cr,
                 chars.get(i).copied(),
                 CellState {
@@ -266,7 +295,7 @@ impl<'a> InputOtp<'a> {
                 let cx = between + sep_gap / 2.0;
                 let cy = cell_rects[0].center().y;
                 ui.painter().hline(
-                    (cx - SEP_W)..=(cx + SEP_W),
+                    (cx - m.sep_w)..=(cx + m.sep_w),
                     cy,
                     Stroke::new(2.0, tokens.muted_foreground),
                 );
@@ -357,7 +386,14 @@ struct CellState {
 }
 
 /// Paint one OTP cell: chrome, optional glyph, optional caret.
-fn paint_cell(ui: &Ui, tokens: Tokens, rect: egui::Rect, ch: Option<char>, cell: CellState) {
+fn paint_cell(
+    ui: &Ui,
+    tokens: Tokens,
+    m: InputOtpMetrics,
+    rect: egui::Rect,
+    ch: Option<char>,
+    cell: CellState,
+) {
     // Active cell takes the focus ring; others a hairline `input` border.
     let stroke = if cell.active {
         Stroke::new(2.0, tokens.ring)
@@ -377,7 +413,7 @@ fn paint_cell(ui: &Ui, tokens: Tokens, rect: egui::Rect, ch: Option<char>, cell:
     if let Some(c) = ch {
         let galley = ui.painter().layout_no_wrap(
             c.to_string(),
-            egui::FontId::proportional(TEXT),
+            egui::FontId::proportional(m.text),
             tokens.foreground,
         );
         let pos = egui::pos2(
@@ -388,7 +424,7 @@ fn paint_cell(ui: &Ui, tokens: Tokens, rect: egui::Rect, ch: Option<char>, cell:
     } else if cell.caret_on {
         // Blinking caret in an empty active cell.
         let cy = rect.center().y;
-        let h = TEXT * 0.6;
+        let h = m.text * 0.6;
         ui.painter().vline(
             rect.center().x,
             (cy - h / 2.0)..=(cy + h / 2.0),

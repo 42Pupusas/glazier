@@ -103,7 +103,7 @@ pub use hover_card::HoverCard;
 pub use icon::Icon;
 pub use input::{Input, InputMetrics};
 pub use input_group::{InputGroup, InputGroupMetrics};
-pub use input_otp::{InputOtp, OtpMode};
+pub use input_otp::{InputOtp, InputOtpMetrics, OtpMode};
 pub use item::Item;
 pub use kbd::Kbd;
 pub use label::Label;
