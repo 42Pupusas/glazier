@@ -34,17 +34,42 @@
 use egui::{Id, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::components::dropdown_menu::DropdownMenu;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Trigger horizontal / vertical padding (`px-3 py-1`).
-const TRIGGER_PAD_X: f32 = 12.0;
-const TRIGGER_PAD_Y: f32 = 4.0;
-/// Minimum trigger height (`h-8` density-trimmed).
-const TRIGGER_MIN_H: f32 = 28.0;
-/// Trigger text size (`text-sm`).
-const TRIGGER_TEXT: f32 = 14.0;
-/// Gap between adjacent triggers.
-const TRIGGER_GAP: f32 = 2.0;
+/// Overridable geometry/timing for [`Menubar`] — reach in via
+/// [`Menubar::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct MenubarMetrics {
+    /// Trigger horizontal padding (`px-3`).
+    pub trigger_pad_x: f32,
+    /// Trigger vertical padding (`py-1`).
+    pub trigger_pad_y: f32,
+    /// Minimum trigger height (`h-8` density-trimmed).
+    pub trigger_min_h: f32,
+    /// Trigger text size (`text-sm`).
+    pub trigger_text: f32,
+    /// Gap between adjacent triggers.
+    pub trigger_gap: f32,
+    /// Gap between the bar and an open menu's popup.
+    pub popup_gap: f32,
+    /// Seconds for the hover/open colour transition.
+    pub hover_time: f32,
+}
+
+impl Default for MenubarMetrics {
+    fn default() -> Self {
+        Self {
+            trigger_pad_x: 12.0,
+            trigger_pad_y: 4.0,
+            trigger_min_h: 28.0,
+            trigger_text: 14.0,
+            trigger_gap: 2.0,
+            popup_gap: 4.0,
+            hover_time: 0.15,
+        }
+    }
+}
 
 /// One top-level entry of a [`Menubar`]: a labelled trigger plus its menu.
 #[must_use = "menubar menus do nothing unless added to a Menubar"]
@@ -68,6 +93,13 @@ impl MenubarMenu {
 pub struct Menubar {
     id_salt: Id,
     menus: Vec<MenubarMenu>,
+    sizing_hook: SizingHook<MenubarMetrics>,
+}
+
+impl Sizeable<MenubarMetrics> for Menubar {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<MenubarMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Menubar {
@@ -77,6 +109,7 @@ impl Menubar {
         Self {
             id_salt: Id::new(id_salt),
             menus: Vec::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -89,8 +122,9 @@ impl Menubar {
     /// Render the bar. Returns `Some((menu_index, item_index))` when an item is
     /// clicked this frame — `menu_index` is the trigger's position and
     /// `item_index` counts only [items](DropdownMenu::item) within that menu.
-    pub fn show(self, ui: &mut Ui) -> Option<(usize, usize)> {
+    pub fn show(mut self, ui: &mut Ui) -> Option<(usize, usize)> {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let active_id = self.id_salt.with("active");
 
         // Which menu (if any) is currently open, from last frame.
@@ -99,10 +133,10 @@ impl Menubar {
         let mut selection = None;
 
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = TRIGGER_GAP;
+            ui.spacing_mut().item_spacing.x = m.trigger_gap;
             for (i, entry) in self.menus.iter().enumerate() {
                 let is_open = active == Some(i);
-                let trigger = trigger_row(ui, tokens, &entry.label, is_open);
+                let trigger = trigger_row(ui, tokens, m, &entry.label, is_open);
 
                 // Click toggles this menu; clicking the open one closes it.
                 if trigger.clicked() {
@@ -124,7 +158,7 @@ impl Menubar {
                         .open_bool(&mut open)
                         .frame(DropdownMenu::frame(tokens))
                         .align(egui::RectAlign::BOTTOM_START)
-                        .gap(4.0)
+                        .gap(m.popup_gap)
                         .show(|ui| {
                             if let Some(item) = entry.menu.show_contents(ui, tokens) {
                                 selection = Some((i, item));
@@ -149,23 +183,31 @@ impl Menubar {
 
 /// A single menubar trigger: ghost text that takes the `accent` surface on
 /// hover or while its menu is open.
-fn trigger_row(ui: &mut Ui, tokens: Tokens, label: &str, open: bool) -> Response {
+fn trigger_row(
+    ui: &mut Ui,
+    tokens: Tokens,
+    m: MenubarMetrics,
+    label: &str,
+    open: bool,
+) -> Response {
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(TRIGGER_TEXT),
+        egui::FontId::proportional(m.trigger_text),
         tokens.foreground,
     );
-    let width = 2.0_f32.mul_add(TRIGGER_PAD_X, galley.size().x);
+    let width = 2.0_f32.mul_add(m.trigger_pad_x, galley.size().x);
     let height = 2.0_f32
-        .mul_add(TRIGGER_PAD_Y, galley.size().y)
-        .max(TRIGGER_MIN_H);
+        .mul_add(m.trigger_pad_y, galley.size().y)
+        .max(m.trigger_min_h);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     if ui.is_rect_visible(rect) {
-        let hover_t =
-            ui.ctx()
-                .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
+        let hover_t = ui.ctx().animate_bool_with_time(
+            response.id.with("hover"),
+            response.hovered(),
+            m.hover_time,
+        );
         // `data-[state=open]:bg-accent` plus `focus:bg-accent`.
         let fill_t = if open { 1.0 } else { hover_t };
         if fill_t > 0.01 {
@@ -182,7 +224,7 @@ fn trigger_row(ui: &mut Ui, tokens: Tokens, label: &str, open: bool) -> Response
             .lerp_to_gamma(tokens.accent_foreground, fill_t);
         let galley = ui.painter().layout_no_wrap(
             label.to_owned(),
-            egui::FontId::proportional(TRIGGER_TEXT),
+            egui::FontId::proportional(m.trigger_text),
             text_color,
         );
         let pos = egui::pos2(
