@@ -37,14 +37,13 @@ use egui::{Align2, Frame, Margin, Modal, Sense, Stroke, Vec2};
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
 use crate::fonts;
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
 /// Duration of the open/close transition, in seconds.
 const ANIM_SECS: f32 = 0.15;
 /// Peak backdrop opacity — a heavier dim than egui's default.
 const BACKDROP_ALPHA: u8 = 140;
-/// shadcn `sm:max-w-lg`: the dialog's content width target.
-const CONTENT_WIDTH: f32 = 512.0;
 /// The `Sheet` frame padding: roomier than the dialog's p-6, with an extra-tall
 /// top inset so the header clears the edge.
 const SHEET_MARGIN: Margin = Margin {
@@ -55,6 +54,33 @@ const SHEET_MARGIN: Margin = Margin {
 };
 /// The close (×) glyph — lucide `x`, matching shadcn's `DialogClose`.
 const X: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>"#;
+
+/// Overridable geometry for [`Dialog`] — reach in via [`Dialog::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct DialogMetrics {
+    /// shadcn `sm:max-w-lg`: the dialog's content width target.
+    pub content_width: f32,
+    /// Header title text size (`text-lg`).
+    pub title_text: f32,
+    /// Header description text size (`text-sm`).
+    pub description_text: f32,
+    /// Gap between the header column's title and description (`gap-1.5`).
+    pub header_gap: f32,
+    /// Gap between the header and the body content (`gap-4`).
+    pub body_gap: f32,
+}
+
+impl Default for DialogMetrics {
+    fn default() -> Self {
+        Self {
+            content_width: 512.0,
+            title_text: 18.0,
+            description_text: 14.0,
+            header_gap: 6.0,
+            body_gap: 16.0,
+        }
+    }
+}
 
 /// `ease-out` cubic: fast start, gentle settle — matches shadcn's enter curve.
 fn ease_out_cubic(t: f32) -> f32 {
@@ -316,14 +342,21 @@ pub(crate) fn modal_shell<R>(
 pub struct Dialog {
     title: String,
     description: Option<String>,
-    width: f32,
+    width: Option<f32>,
     show_close: bool,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<DialogMetrics>,
 }
 
 impl Customize<Frame> for Dialog {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<DialogMetrics> for Dialog {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<DialogMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -333,9 +366,10 @@ impl Dialog {
         Self {
             title: title.into(),
             description: None,
-            width: CONTENT_WIDTH,
+            width: None,
             show_close: true,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -348,7 +382,7 @@ impl Dialog {
     /// Override the target content width (shadcn's default is `max-w-lg`, 512px).
     /// The card is still clamped to fit narrow viewports.
     pub const fn width(mut self, width: f32) -> Self {
-        self.width = width;
+        self.width = Some(width);
         self
     }
 
@@ -372,6 +406,8 @@ impl Dialog {
     ) -> Option<R> {
         let id = egui::Id::new("glazier-dialog").with(&self.title);
         let style_hook = std::mem::take(&mut self.style_hook);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
+        let width = self.width.unwrap_or(m.content_width);
 
         let mut closed = false;
         let out = modal_shell(
@@ -379,11 +415,11 @@ impl Dialog {
             id,
             *open,
             ModalStyle::Center,
-            self.width,
+            width,
             style_hook,
             |ui, tokens, _width| {
-                ui.spacing_mut().item_spacing = Vec2::new(0.0, 16.0); // gap-4
-                self.header(ui, tokens, &mut closed);
+                ui.spacing_mut().item_spacing = Vec2::new(0.0, m.body_gap);
+                self.header(ui, tokens, m, &mut closed);
                 content(ui)
             },
         );
@@ -401,15 +437,15 @@ impl Dialog {
 
     /// Paint the header: a title row with the top-right close (×) button, then
     /// the muted description beneath (shadcn's `gap-1.5` header column).
-    fn header(&self, ui: &mut egui::Ui, tokens: Tokens, closed: &mut bool) {
+    fn header(&self, ui: &mut egui::Ui, tokens: Tokens, m: DialogMetrics, closed: &mut bool) {
         ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 6.0; // gap-1.5
+            ui.spacing_mut().item_spacing.y = m.header_gap;
 
             // Title (left) + close button pinned to the top-right corner.
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&self.title)
-                        .font(fonts::semibold(ui, 18.0)) // text-lg
+                        .font(fonts::semibold(ui, m.title_text))
                         .color(tokens.foreground),
                 );
                 if self.show_close {
@@ -424,7 +460,7 @@ impl Dialog {
             if let Some(desc) = &self.description {
                 ui.label(
                     egui::RichText::new(desc)
-                        .size(14.0) // text-sm
+                        .size(m.description_text)
                         .color(tokens.muted_foreground),
                 );
             }

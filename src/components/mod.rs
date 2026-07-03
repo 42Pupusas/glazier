@@ -93,7 +93,7 @@ pub use command::{Command, CommandGroup, CommandItem};
 pub use context_menu::ContextMenu;
 pub use data_table::{DataColumn, DataTable, DataTableMetrics};
 pub use date_picker::{DatePicker, DatePickerMetrics};
-pub use dialog::Dialog;
+pub use dialog::{Dialog, DialogMetrics};
 pub use drawer::{Drawer, DrawerMetrics};
 pub use dropdown_menu::{DropdownMenu, DropdownMenuMetrics};
 pub use empty::{Empty, EmptyMetrics};
