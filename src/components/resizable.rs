@@ -301,9 +301,14 @@ fn resolve_style(tokens: Tokens, hook: StyleHook<ResizableStyle>) -> ResizableSt
 /// Horizontal split (vertical divider): pill is `10 × 24`, dots stacked vertically.
 /// Vertical split (horizontal divider): pill is `24 × 10`, dots side by side.
 fn paint_grip(ui: &Ui, center: egui::Pos2, horizontal: bool, color: egui::Color32) {
-    let (w, h) = if horizontal { (10.0, 24.0) } else { (24.0, 10.0) };
+    let (w, h) = if horizontal {
+        (10.0, 24.0)
+    } else {
+        (24.0, 10.0)
+    };
     let bar = egui::Rect::from_center_size(center, Vec2::new(w, h));
-    ui.painter().rect_filled(bar, 4.0, color.gamma_multiply(0.30));
+    ui.painter()
+        .rect_filled(bar, 4.0, color.gamma_multiply(0.30));
     for s in [-5.0_f32, 0.0, 5.0] {
         let p = if horizontal {
             egui::pos2(center.x, center.y + s)

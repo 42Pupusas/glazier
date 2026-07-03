@@ -29,30 +29,54 @@ use egui::{Align2, Area, Id, Order, Response, Sense, Stroke, StrokeKind, Ui, Vec
 
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// `chevron-down` (lucide) — the trailing affordance on menu triggers.
+/// chevron-down (lucide): the trailing affordance on menu triggers.
 const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 
-/// Hover rest before a panel opens (seconds).
-const OPEN_DELAY: f32 = 0.15;
-/// Grace period after the pointer leaves both bar and panel before it closes.
-const CLOSE_DELAY: f32 = 0.20;
-/// Gap between the bar and the flyout panel.
-const GAP: f32 = 8.0;
-/// Default flyout panel width.
-const DEFAULT_PANEL_W: f32 = 460.0;
+/// Overridable geometry/timing for [`NavigationMenu`], reach in via
+/// [`NavigationMenu::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct NavigationMenuMetrics {
+    /// Hover rest before a panel opens (seconds).
+    pub open_delay: f32,
+    /// Grace period after the pointer leaves both bar and panel before it closes.
+    pub close_delay: f32,
+    /// Gap between the bar and the flyout panel.
+    pub gap: f32,
+    /// Default flyout panel width (overridable per-item via [`NavItem::panel_width`]).
+    pub default_panel_w: f32,
+    /// Trigger horizontal padding (px-4).
+    pub trigger_pad_x: f32,
+    /// Trigger vertical padding (py-2).
+    pub trigger_pad_y: f32,
+    /// Minimum trigger height (h-9).
+    pub trigger_min_h: f32,
+    /// Trigger text size (text-sm).
+    pub trigger_text: f32,
+    /// Gap between the label and the chevron.
+    pub chevron_gap: f32,
+    /// Chevron glyph edge length.
+    pub chevron_size: f32,
+}
 
-/// Trigger horizontal / vertical padding (`px-4 py-2`).
-const TRIGGER_PAD_X: f32 = 16.0;
-const TRIGGER_PAD_Y: f32 = 8.0;
-/// Minimum trigger height (`h-9`).
-const TRIGGER_MIN_H: f32 = 36.0;
-/// Trigger text size (`text-sm`).
-const TRIGGER_TEXT: f32 = 14.0;
-/// Gap between the label and the chevron.
-const CHEVRON_GAP: f32 = 4.0;
-const CHEVRON_SIZE: f32 = 14.0;
+impl Default for NavigationMenuMetrics {
+    fn default() -> Self {
+        Self {
+            open_delay: 0.15,
+            close_delay: 0.20,
+            gap: 8.0,
+            default_panel_w: 460.0,
+            trigger_pad_x: 16.0,
+            trigger_pad_y: 8.0,
+            trigger_min_h: 36.0,
+            trigger_text: 14.0,
+            chevron_gap: 4.0,
+            chevron_size: 14.0,
+        }
+    }
+}
 
 /// One top-level entry: either a `menu` (opens a flyout panel) or a plain
 /// `link` (returns a click).
@@ -60,7 +84,7 @@ const CHEVRON_SIZE: f32 = 14.0;
 pub struct NavItem {
     label: String,
     has_panel: bool,
-    panel_width: f32,
+    panel_width: Option<f32>,
 }
 
 impl NavItem {
@@ -69,22 +93,23 @@ impl NavItem {
         Self {
             label: label.into(),
             has_panel: true,
-            panel_width: DEFAULT_PANEL_W,
+            panel_width: None,
         }
     }
 
-    /// A plain navigation link (no panel) — `show` returns its click.
+    /// A plain navigation link (no panel): show returns its click.
     pub fn link(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             has_panel: false,
-            panel_width: DEFAULT_PANEL_W,
+            panel_width: None,
         }
     }
 
-    /// Override this menu's flyout panel width (default ~460px).
+    /// Override this menu's flyout panel width (default from
+    /// [`NavigationMenuMetrics::default_panel_w`], ~460px).
     pub const fn panel_width(mut self, width: f32) -> Self {
-        self.panel_width = width;
+        self.panel_width = Some(width);
         self
     }
 }
@@ -126,11 +151,18 @@ pub struct NavigationMenu {
     id_salt: Id,
     items: Vec<NavItem>,
     style_hook: StyleHook<egui::Frame>,
+    sizing_hook: SizingHook<NavigationMenuMetrics>,
 }
 
 impl Customize<egui::Frame> for NavigationMenu {
     fn style_hook_mut(&mut self) -> &mut StyleHook<egui::Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<NavigationMenuMetrics> for NavigationMenu {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<NavigationMenuMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -142,6 +174,7 @@ impl NavigationMenu {
             id_salt: Id::new(id_salt),
             items: Vec::new(),
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -156,6 +189,7 @@ impl NavigationMenu {
     /// [`NavResponse`] describing link clicks this frame.
     pub fn show(mut self, ui: &mut Ui, panel: impl FnOnce(usize, &mut Ui)) -> NavResponse {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let ctx = ui.ctx().clone();
         let state_id = self.id_salt.with("nav-state");
         let now = ctx.input(|i| i.time);
@@ -172,7 +206,7 @@ impl NavigationMenu {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, item) in self.items.iter().enumerate() {
                 let is_open = state.open == Some(i);
-                let resp = trigger_row(ui, tokens, &item.label, item.has_panel, is_open);
+                let resp = trigger_row(ui, tokens, m, &item.label, item.has_panel, is_open);
 
                 if item.has_panel {
                     if resp.hovered() {
@@ -185,7 +219,8 @@ impl NavigationMenu {
                         state.pending_target = None;
                     }
                     if is_open {
-                        open_anchor = Some((resp.rect, item.panel_width));
+                        let width = item.panel_width.unwrap_or(m.default_panel_w);
+                        open_anchor = Some((resp.rect, width));
                     }
                 } else if resp.clicked() {
                     link_clicked = Some(i);
@@ -200,7 +235,7 @@ impl NavigationMenu {
         // Drive the hover state machine: the target is the hovered trigger (to
         // open/switch) or `None` once the pointer rests off both bar and panel
         // (to close). Switching between already-open menus is instant.
-        Self::drive(&ctx, &mut state, now, hovered_trigger);
+        Self::drive(&ctx, &mut state, now, hovered_trigger, m);
 
         // Render the flyout panel for the open menu.
         if let (Some(open), Some((anchor, width))) = (state.open, open_anchor) {
@@ -212,17 +247,23 @@ impl NavigationMenu {
                 open,
             };
             let style_hook = std::mem::take(&mut self.style_hook);
-            state.panel_hovered = Self::show_panel(ui, tokens, geom, style_hook, panel);
+            state.panel_hovered = Self::show_panel(ui, tokens, geom, style_hook, m, panel);
         } else {
             state.panel_hovered = false;
         }
 
-        ctx.memory_mut(|m| m.data.insert_temp(state_id, state));
+        ctx.memory_mut(|d| d.data.insert_temp(state_id, state));
         NavResponse { link_clicked }
     }
 
     /// Advance the open/switch/close timer for one frame.
-    fn drive(ctx: &egui::Context, state: &mut NavState, now: f64, hovered: Option<usize>) {
+    fn drive(
+        ctx: &egui::Context,
+        state: &mut NavState,
+        now: f64,
+        hovered: Option<usize>,
+        m: NavigationMenuMetrics,
+    ) {
         // "Active target" = hovered trigger, or keep-open if the panel is hovered.
         let target = hovered.or(if state.panel_hovered {
             state.open
@@ -248,9 +289,9 @@ impl NavigationMenu {
 
         // Opening from closed, or closing to none: run the appropriate timer.
         let delay = f64::from(if target.is_some() {
-            OPEN_DELAY
+            m.open_delay
         } else {
-            CLOSE_DELAY
+            m.close_delay
         });
         if state.pending_target != target {
             state.pending_target = target;
@@ -268,11 +309,13 @@ impl NavigationMenu {
     }
 
     /// Float the flyout panel below the bar; returns whether it's hovered.
+    #[allow(clippy::too_many_arguments)]
     fn show_panel(
         ui: &Ui,
         tokens: Tokens,
         geom: PanelGeom,
         style_hook: StyleHook<egui::Frame>,
+        m: NavigationMenuMetrics,
         panel: impl FnOnce(usize, &mut Ui),
     ) -> bool {
         let PanelGeom {
@@ -291,7 +334,7 @@ impl NavigationMenu {
         if left + width > screen.right() - 8.0 {
             left = (screen.right() - 8.0 - width).max(screen.left() + 8.0);
         }
-        let top = bar_rect.bottom() + GAP;
+        let top = bar_rect.bottom() + m.gap;
 
         // Opaque `widget` (popover) surface — `background` is the app-canvas
         // token and may be translucent under a user theme; `card` is reserved
@@ -327,21 +370,28 @@ impl NavigationMenu {
 
 /// A single nav trigger: ghost text (plus a chevron for menus) that takes the
 /// `accent` surface on hover or while its panel is open.
-fn trigger_row(ui: &mut Ui, tokens: Tokens, label: &str, has_panel: bool, open: bool) -> Response {
+fn trigger_row(
+    ui: &mut Ui,
+    tokens: Tokens,
+    m: NavigationMenuMetrics,
+    label: &str,
+    has_panel: bool,
+    open: bool,
+) -> Response {
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(TRIGGER_TEXT),
+        egui::FontId::proportional(m.trigger_text),
         tokens.foreground,
     );
     let chevron_w = if has_panel {
-        CHEVRON_GAP + CHEVRON_SIZE
+        m.chevron_gap + m.chevron_size
     } else {
         0.0
     };
-    let width = 2.0_f32.mul_add(TRIGGER_PAD_X, galley.size().x + chevron_w);
+    let width = 2.0_f32.mul_add(m.trigger_pad_x, galley.size().x + chevron_w);
     let height = 2.0_f32
-        .mul_add(TRIGGER_PAD_Y, galley.size().y)
-        .max(TRIGGER_MIN_H);
+        .mul_add(m.trigger_pad_y, galley.size().y)
+        .max(m.trigger_min_h);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
@@ -368,16 +418,16 @@ fn trigger_row(ui: &mut Ui, tokens: Tokens, label: &str, has_panel: bool, open: 
         let mut x = rect.center().x - content_w / 2.0;
         let galley = ui.painter().layout_no_wrap(
             label.to_owned(),
-            egui::FontId::proportional(TRIGGER_TEXT),
+            egui::FontId::proportional(m.trigger_text),
             text_color,
         );
         let gy = rect.center().y - galley.size().y / 2.0;
         ui.painter().galley(egui::pos2(x, gy), galley, text_color);
-        x += content_w - chevron_w + CHEVRON_GAP;
+        x += content_w - chevron_w + m.chevron_gap;
         if has_panel {
             let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(x, rect.center().y - CHEVRON_SIZE / 2.0),
-                Vec2::splat(CHEVRON_SIZE),
+                egui::pos2(x, rect.center().y - m.chevron_size / 2.0),
+                Vec2::splat(m.chevron_size),
             );
             Icon::new(CHEVRON_DOWN)
                 .color(text_color)
