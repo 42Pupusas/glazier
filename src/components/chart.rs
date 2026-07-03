@@ -29,10 +29,50 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Width of the left gutter reserved for y-axis tick labels.
-const Y_AXIS_W: f32 = 30.0;
+/// Overridable geometry for [`Chart`] — reach in via [`Chart::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct ChartMetrics {
+    /// Width of the left gutter reserved for y-axis tick labels.
+    pub y_axis_w: f32,
+    /// Legend row height, reserved below the plot when shown.
+    pub legend_h: f32,
+    /// Axis tick / x-label text size.
+    pub axis_text: f32,
+    /// Legend swatch+label text size.
+    pub legend_text: f32,
+    /// Legend swatch edge length.
+    pub legend_swatch: f32,
+    /// Gap between legend entries.
+    pub legend_gap: f32,
+    /// Tooltip title/row text size.
+    pub tooltip_text: f32,
+    /// Tooltip inner padding.
+    pub tooltip_pad: f32,
+    /// Tooltip row height.
+    pub tooltip_row_h: f32,
+    /// Tooltip swatch edge length.
+    pub tooltip_swatch: f32,
+}
+
+impl Default for ChartMetrics {
+    fn default() -> Self {
+        Self {
+            y_axis_w: 30.0,
+            legend_h: 22.0,
+            axis_text: 10.0,
+            legend_text: 11.0,
+            legend_swatch: 9.0,
+            legend_gap: 14.0,
+            tooltip_text: 11.0,
+            tooltip_pad: 8.0,
+            tooltip_row_h: 16.0,
+            tooltip_swatch: 9.0,
+        }
+    }
+}
 
 /// shadcn's default `--chart-1..5` hues (their light palette), plus a couple of
 /// extras so larger configs still get distinct colours.
@@ -93,6 +133,13 @@ pub struct Chart {
     height: f32,
     legend: bool,
     y_max: Option<f32>,
+    sizing_hook: SizingHook<ChartMetrics>,
+}
+
+impl Sizeable<ChartMetrics> for Chart {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<ChartMetrics> {
+        &mut self.sizing_hook
+    }
 }
 
 impl Chart {
@@ -105,6 +152,7 @@ impl Chart {
             height: 220.0,
             legend: true,
             y_max: None,
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -162,14 +210,15 @@ impl Chart {
     }
 
     /// Render the chart.
-    pub fn show(self, ui: &mut Ui) -> egui::Response {
+    pub fn show(mut self, ui: &mut Ui) -> egui::Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let n = self.labels.len();
         let width = ui.available_width();
 
         // Reserve plot + (optional) legend.
         let legend_h = if self.legend && !self.series.is_empty() {
-            22.0
+            m.legend_h
         } else {
             0.0
         };
@@ -184,13 +233,13 @@ impl Chart {
         // of right margin, leaving a bottom gutter for the x-axis labels and a
         // little top headroom so the tallest point isn't flush to the edge.
         let plot = Rect::from_min_max(
-            Pos2::new(rect.left() + Y_AXIS_W, rect.top() + 6.0),
+            Pos2::new(rect.left() + m.y_axis_w, rect.top() + 6.0),
             Pos2::new(rect.right() - 4.0, rect.top() + self.height - 20.0),
         );
         let y_max = self.resolve_max();
 
-        Self::paint_grid(ui, tokens, plot, y_max);
-        self.paint_x_labels(ui, tokens, plot, rect);
+        Self::paint_grid(ui, tokens, m, plot, y_max);
+        self.paint_x_labels(ui, tokens, m, plot, rect);
 
         let hover = response
             .hover_pos()
@@ -206,18 +255,18 @@ impl Chart {
         if legend_h > 0.0 {
             let legend_rect =
                 Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - legend_h), rect.max);
-            self.paint_legend(ui, tokens, legend_rect);
+            self.paint_legend(ui, tokens, m, legend_rect);
         }
 
         if let Some(idx) = active {
-            self.paint_tooltip(ui, tokens, plot, idx, n);
+            self.paint_tooltip(ui, tokens, m, plot, idx, n);
         }
 
         response
     }
 
     /// Horizontal gridlines + a baseline, in the muted border colour.
-    fn paint_grid(ui: &Ui, tokens: Tokens, plot: Rect, y_max: f32) {
+    fn paint_grid(ui: &Ui, tokens: Tokens, m: ChartMetrics, plot: Rect, y_max: f32) {
         let painter = ui.painter();
         let lines = 4;
         let faint = tokens.border.gamma_multiply(0.7);
@@ -232,14 +281,14 @@ impl Chart {
                 Pos2::new(plot.left() - 2.0, y),
                 Align2::RIGHT_CENTER,
                 format_tick(val),
-                FontId::proportional(10.0),
+                FontId::proportional(m.axis_text),
                 tokens.muted_foreground,
             );
         }
     }
 
     /// X-axis category labels under the plot.
-    fn paint_x_labels(&self, ui: &Ui, tokens: Tokens, plot: Rect, rect: Rect) {
+    fn paint_x_labels(&self, ui: &Ui, tokens: Tokens, m: ChartMetrics, plot: Rect, rect: Rect) {
         let painter = ui.painter();
         let n = self.labels.len();
         for (i, label) in self.labels.iter().enumerate() {
@@ -248,7 +297,7 @@ impl Chart {
                 Pos2::new(x, rect.top() + self.height - 14.0),
                 Align2::CENTER_TOP,
                 label,
-                FontId::proportional(10.0),
+                FontId::proportional(m.axis_text),
                 tokens.muted_foreground,
             );
         }
@@ -368,12 +417,12 @@ impl Chart {
     }
 
     /// The swatch+label legend row, centred under the plot.
-    fn paint_legend(&self, ui: &Ui, tokens: Tokens, area: Rect) {
+    fn paint_legend(&self, ui: &Ui, tokens: Tokens, m: ChartMetrics, area: Rect) {
         let painter = ui.painter();
-        let font = FontId::proportional(11.0);
+        let font = FontId::proportional(m.legend_text);
         // Measure total width to centre the row.
-        let gap = 14.0;
-        let swatch = 9.0;
+        let gap = m.legend_gap;
+        let swatch = m.legend_swatch;
         let mut items = Vec::with_capacity(self.series.len());
         let mut total = 0.0;
         for (i, s) in self.series.iter().enumerate() {
@@ -401,7 +450,15 @@ impl Chart {
     }
 
     /// A floating tooltip card for the hovered category.
-    fn paint_tooltip(&self, ui: &Ui, tokens: Tokens, plot: Rect, cat: usize, n: usize) {
+    fn paint_tooltip(
+        &self,
+        ui: &Ui,
+        tokens: Tokens,
+        m: ChartMetrics,
+        plot: Rect,
+        cat: usize,
+        n: usize,
+    ) {
         let painter = ui.painter();
         let cx = Self::category_center(plot, cat, n);
 
@@ -412,11 +469,11 @@ impl Chart {
             Stroke::new(1.0, tokens.muted_foreground.gamma_multiply(0.5)),
         );
 
-        let title_font = FontId::proportional(11.0);
-        let row_font = FontId::proportional(11.0);
-        let pad = 8.0;
-        let row_h = 16.0;
-        let swatch = 9.0;
+        let title_font = FontId::proportional(m.tooltip_text);
+        let row_font = FontId::proportional(m.tooltip_text);
+        let pad = m.tooltip_pad;
+        let row_h = m.tooltip_row_h;
+        let swatch = m.tooltip_swatch;
 
         // Lay out rows: "label   value".
         let title = self.labels.get(cat).cloned().unwrap_or_default();
@@ -437,7 +494,7 @@ impl Chart {
         #[allow(clippy::cast_precision_loss)]
         let body_h = (rows.len() as f32).mul_add(row_h, title_g.size().y + 4.0);
         let box_h = 2.0f32.mul_add(pad, body_h);
-        let box_w = max_w + pad * 2.0;
+        let box_w = pad.mul_add(2.0, max_w);
 
         // Prefer the right of the guide; flip if it would overflow.
         let mut left = cx + 12.0;

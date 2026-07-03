@@ -85,7 +85,7 @@ pub use button_group::{ButtonGroup, ButtonGroupMetrics};
 pub use calendar::{Calendar, CalendarMetrics, Date};
 pub use card::Card;
 pub use carousel::{Carousel, CarouselMetrics};
-pub use chart::Chart;
+pub use chart::{Chart, ChartMetrics};
 pub use checkbox::{Checkbox, CheckboxMetrics};
 pub use collapsible::{Collapsible, CollapsibleMetrics};
 pub use combobox::{Combobox, ComboboxMetrics};
