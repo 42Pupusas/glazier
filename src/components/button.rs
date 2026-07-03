@@ -13,12 +13,33 @@ use egui::{Color32, Response, Sense, Stroke, Ui, Vec2, Widget, WidgetText};
 
 use crate::components::icon::Icon;
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Seconds for the hover colour transition to complete (shadcn ~150ms).
-const HOVER_TIME: f32 = 0.15;
-/// Seconds for the press push/darken to complete (snappier than hover).
-const PRESS_TIME: f32 = 0.07;
+/// Overridable geometry/timing for [`Button`] — reach in via
+/// [`Button::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct ButtonMetrics {
+    /// Seconds for the hover colour transition to complete (shadcn ~150ms).
+    pub hover_time: f32,
+    /// Seconds for the press push/darken to complete (snappier than hover).
+    pub press_time: f32,
+    /// Gap between the label and an inline icon (shadcn `gap-1.5`).
+    pub icon_gap: f32,
+    /// Inline icon edge length (shadcn `size-4`).
+    pub icon_size: f32,
+}
+
+impl Default for ButtonMetrics {
+    fn default() -> Self {
+        Self {
+            hover_time: 0.15,
+            press_time: 0.07,
+            icon_gap: 6.0,
+            icon_size: 16.0,
+        }
+    }
+}
 
 /// Visual style of a [`Button`], mirroring shadcn's variant prop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -163,11 +184,6 @@ impl Variant {
 /// Button::new("+").variant(Variant::Outline).size(Size::Icon).ui(ui);
 /// # });
 /// ```
-/// Gap between the label and an inline icon (shadcn `gap-1.5`).
-const ICON_GAP: f32 = 6.0;
-/// Inline icon edge length (shadcn `size-4`).
-const ICON_SIZE: f32 = 16.0;
-
 #[must_use = "buttons do nothing unless you add them to a Ui"]
 pub struct Button {
     text: WidgetText,
@@ -177,6 +193,7 @@ pub struct Button {
     icon_end: Option<Icon>,
     full_width: bool,
     style_hook: StyleHook<ButtonStyle>,
+    sizing_hook: SizingHook<ButtonMetrics>,
 }
 
 impl Button {
@@ -190,6 +207,7 @@ impl Button {
             icon_end: None,
             full_width: false,
             style_hook: StyleHook::default(),
+            sizing_hook: SizingHook::default(),
         }
     }
 
@@ -230,9 +248,16 @@ impl Customize<ButtonStyle> for Button {
     }
 }
 
+impl Sizeable<ButtonMetrics> for Button {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<ButtonMetrics> {
+        &mut self.sizing_hook
+    }
+}
+
 impl Widget for Button {
-    fn ui(self, ui: &mut Ui) -> Response {
+    fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let mut style = self.variant.paint(tokens);
         self.style_hook.apply(&mut style);
         let ButtonStyle {
@@ -266,9 +291,9 @@ impl Widget for Button {
         // icon and a label, so icon-only buttons stay square (no phantom gap).
         let has_label = rich.size().x > 0.0;
         let n_icons = u8::from(self.icon_start.is_some()) + u8::from(self.icon_end.is_some());
-        let icons_w = f32::from(n_icons) * ICON_SIZE;
+        let icons_w = f32::from(n_icons) * m.icon_size;
         let gaps_w = if has_label {
-            f32::from(n_icons) * ICON_GAP
+            f32::from(n_icons) * m.icon_gap
         } else {
             0.0
         };
@@ -293,11 +318,11 @@ impl Widget for Button {
         let id = response.id;
         let hover_t =
             ui.ctx()
-                .animate_bool_with_time(id.with("hover"), response.hovered(), HOVER_TIME);
+                .animate_bool_with_time(id.with("hover"), response.hovered(), m.hover_time);
         let press_t = ui.ctx().animate_bool_with_time(
             id.with("press"),
             response.is_pointer_button_down_on(),
-            PRESS_TIME,
+            m.press_time,
         );
 
         if ui.is_rect_visible(rect) {
@@ -331,12 +356,12 @@ impl Widget for Button {
                 .rect(draw_rect, radius, bg, stroke, egui::StrokeKind::Inside);
 
             // Lay icon(s) + label as one centered horizontal run.
-            let gap = if has_label { ICON_GAP } else { 0.0 };
+            let gap = if has_label { m.icon_gap } else { 0.0 };
             let mut cursor = draw_rect.center().x - content_w / 2.0;
             let cy = draw_rect.center().y;
             if let Some(icon) = self.icon_start {
-                paint_icon(ui, icon, text, cursor, cy);
-                cursor += ICON_SIZE + gap;
+                paint_icon(ui, icon, text, cursor, cy, m.icon_size);
+                cursor += m.icon_size + gap;
             }
             let text_pos = egui::pos2(cursor, cy - galley_size.y / 2.0);
             ui.painter().galley(text_pos, rich, text);
@@ -351,7 +376,7 @@ impl Widget for Button {
             }
             if let Some(icon) = self.icon_end {
                 cursor += gap;
-                paint_icon(ui, icon, text, cursor, cy);
+                paint_icon(ui, icon, text, cursor, cy, m.icon_size);
             }
         }
 
@@ -443,9 +468,8 @@ fn delinearize(c: f32) -> u8 {
 
 /// Paint a `size-4` icon, tinted to the button's text colour, with its left
 /// edge at `x` and vertically centred on `cy`.
-fn paint_icon(ui: &Ui, icon: Icon, tint: Color32, x: f32, cy: f32) {
+fn paint_icon(ui: &Ui, icon: Icon, tint: Color32, x: f32, cy: f32, size: f32) {
     let tokens = Tokens::get(ui);
-    let rect =
-        egui::Rect::from_min_size(egui::pos2(x, cy - ICON_SIZE / 2.0), Vec2::splat(ICON_SIZE));
+    let rect = egui::Rect::from_min_size(egui::pos2(x, cy - size / 2.0), Vec2::splat(size));
     icon.color(tint).image(tokens).paint_at(ui, rect);
 }

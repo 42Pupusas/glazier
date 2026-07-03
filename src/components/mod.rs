@@ -80,7 +80,7 @@ pub use avatar::Avatar;
 pub use badge::{Badge, BadgeMetrics, BadgeStyle};
 pub use breadcrumb::{Breadcrumb, BreadcrumbMetrics};
 pub use bubble::{Bubble, BubbleGroup, BubbleStyle as BubbleSurfaceStyle};
-pub use button::{Button, ButtonStyle};
+pub use button::{Button, ButtonMetrics, ButtonStyle};
 pub use button_group::{ButtonGroup, ButtonGroupMetrics};
 pub use calendar::{Calendar, CalendarMetrics, Date};
 pub use card::Card;
