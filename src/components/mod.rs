@@ -99,7 +99,7 @@ pub use dropdown_menu::DropdownMenu;
 pub use empty::{Empty, EmptyMetrics};
 pub use field::Field;
 pub use grid::Grid;
-pub use hover_card::HoverCard;
+pub use hover_card::{HoverCard, HoverCardMetrics};
 pub use icon::Icon;
 pub use input::{Input, InputMetrics};
 pub use input_group::{InputGroup, InputGroupMetrics};

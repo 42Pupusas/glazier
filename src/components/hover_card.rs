@@ -25,18 +25,38 @@
 use egui::{Area, Frame, Margin, Order, Response, Stroke, Ui, Vec2};
 
 use crate::customize::{Customize, StyleHook};
+use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
-/// Hover delay before the card appears, in seconds (shadcn's default ~700ms,
-/// trimmed a touch for snappier feedback).
-const OPEN_DELAY: f32 = 0.5;
-/// Grace period after the pointer leaves both trigger and card before it
-/// dismisses — long enough to travel from the trigger onto the card.
-const CLOSE_DELAY: f32 = 0.25;
-/// Gap between the trigger and the card.
-const GAP: f32 = 8.0;
-/// Default card width (shadcn's `w-80` ≈ 320px, trimmed for egui density).
-const DEFAULT_WIDTH: f32 = 300.0;
+/// Overridable geometry/timing for [`HoverCard`] — reach in via
+/// [`HoverCard::sizing`].
+#[derive(Clone, Copy, Debug)]
+pub struct HoverCardMetrics {
+    /// Hover delay before the card appears, in seconds (shadcn's default
+    /// ~700ms, trimmed a touch for snappier feedback).
+    pub open_delay: f32,
+    /// Grace period after the pointer leaves both trigger and card before it
+    /// dismisses — long enough to travel from the trigger onto the card.
+    pub close_delay: f32,
+    /// Gap between the trigger and the card.
+    pub gap: f32,
+    /// Default card width (shadcn's `w-80` ≈ 320px, trimmed for egui density).
+    pub default_width: f32,
+    /// Seconds for the open/close fade.
+    pub fade_time: f32,
+}
+
+impl Default for HoverCardMetrics {
+    fn default() -> Self {
+        Self {
+            open_delay: 0.5,
+            close_delay: 0.25,
+            gap: 8.0,
+            default_width: 300.0,
+            fade_time: 0.12,
+        }
+    }
+}
 
 /// Per-trigger open/timing state, persisted in egui memory.
 #[derive(Clone, Copy, Default)]
@@ -55,15 +75,22 @@ struct HoverState {
 #[must_use = "hover cards do nothing unless you show them"]
 pub struct HoverCard {
     width: Option<f32>,
-    open_delay: f32,
-    close_delay: f32,
-    gap: f32,
+    open_delay: Option<f32>,
+    close_delay: Option<f32>,
+    gap: Option<f32>,
     style_hook: StyleHook<Frame>,
+    sizing_hook: SizingHook<HoverCardMetrics>,
 }
 
 impl Customize<Frame> for HoverCard {
     fn style_hook_mut(&mut self) -> &mut StyleHook<Frame> {
         &mut self.style_hook
+    }
+}
+
+impl Sizeable<HoverCardMetrics> for HoverCard {
+    fn sizing_hook_mut(&mut self) -> &mut SizingHook<HoverCardMetrics> {
+        &mut self.sizing_hook
     }
 }
 
@@ -78,10 +105,11 @@ impl HoverCard {
     pub const fn new() -> Self {
         Self {
             width: None,
-            open_delay: OPEN_DELAY,
-            close_delay: CLOSE_DELAY,
-            gap: GAP,
+            open_delay: None,
+            close_delay: None,
+            gap: None,
             style_hook: StyleHook::new(),
+            sizing_hook: SizingHook::new(),
         }
     }
 
@@ -93,19 +121,19 @@ impl HoverCard {
 
     /// Override the hover delay before the card opens (seconds).
     pub const fn open_delay(mut self, secs: f32) -> Self {
-        self.open_delay = secs;
+        self.open_delay = Some(secs);
         self
     }
 
     /// Override the grace period before the card closes (seconds).
     pub const fn close_delay(mut self, secs: f32) -> Self {
-        self.close_delay = secs;
+        self.close_delay = Some(secs);
         self
     }
 
     /// Set the gap between the trigger and the card.
     pub const fn gap(mut self, gap: f32) -> Self {
-        self.gap = gap;
+        self.gap = Some(gap);
         self
     }
 
@@ -119,6 +147,11 @@ impl HoverCard {
         response: &Response,
         content: impl FnOnce(&mut Ui) -> R,
     ) -> Option<R> {
+        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
+        let open_delay = self.open_delay.unwrap_or(m.open_delay);
+        let close_delay = self.close_delay.unwrap_or(m.close_delay);
+        let gap = self.gap.unwrap_or(m.gap);
+
         let ctx = ui.ctx();
         let id = response.id.with("glazier-hover-card");
         let now = ctx.input(|i| i.time);
@@ -127,11 +160,7 @@ impl HoverCard {
 
         // "Active" = pointer over the trigger or over the card (last frame).
         let active = response.hovered() || state.card_hovered;
-        let delay = f64::from(if state.open {
-            self.close_delay
-        } else {
-            self.open_delay
-        });
+        let delay = f64::from(if state.open { close_delay } else { open_delay });
 
         // Drive the little open/close state machine. While `active` matches the
         // direction we'd transition toward, run a timer; when it elapses, flip.
@@ -151,7 +180,7 @@ impl HoverCard {
             state.pending_since = None;
         }
 
-        let t = ctx.animate_bool_with_time(id, state.open, 0.12);
+        let t = ctx.animate_bool_with_time(id, state.open, m.fade_time);
         if t <= 0.0 {
             // Fully closed: clear hover memory and persist.
             state.card_hovered = false;
@@ -161,7 +190,7 @@ impl HoverCard {
 
         let tokens = Tokens::get(ui);
         let anchor = response.rect;
-        let width = self.width.unwrap_or(DEFAULT_WIDTH);
+        let width = self.width.unwrap_or(m.default_width);
 
         // Prefer opening below; flip above when the trigger sits near the
         // screen bottom and there's more room up top.
@@ -171,12 +200,12 @@ impl HoverCard {
         let (pivot, pivot_pos) = if below {
             (
                 egui::Align2::LEFT_TOP,
-                anchor.left_bottom() + Vec2::new(0.0, self.gap),
+                anchor.left_bottom() + Vec2::new(0.0, gap),
             )
         } else {
             (
                 egui::Align2::LEFT_BOTTOM,
-                anchor.left_top() - Vec2::new(0.0, self.gap),
+                anchor.left_top() - Vec2::new(0.0, gap),
             )
         };
 
