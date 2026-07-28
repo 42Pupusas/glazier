@@ -1,6 +1,6 @@
 [package]
 name = "glazier"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "shadcn/ui-inspired component set for egui/eframe"
 license = "MIT"
@@ -14,11 +14,13 @@ exclude = ["PLAN.md"]
 system-fonts = []
 
 [dependencies]
-egui = "0.34"
-egui_extras = { version = "0.34", default-features = false, features = ["svg"] }
+# Glazier components exchange egui types with their host application. Keep this
+# release line aligned so widget values never cross incompatible egui versions.
+egui = "0.35"
+egui_extras = { version = "0.35", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
-eframe = "0.34"
+eframe = "0.35"
 
 [lints.clippy]
 style = { level = "warn", priority = -1 }

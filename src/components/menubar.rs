@@ -105,7 +105,7 @@ impl Sizeable<MenubarMetrics> for Menubar {
 impl Menubar {
     /// Create an empty menubar with a stable `id_salt` (used to remember which
     /// menu is open across frames).
-    pub fn new(id_salt: impl std::hash::Hash) -> Self {
+    pub fn new(id_salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
             id_salt: Id::new(id_salt),
             menus: Vec::new(),

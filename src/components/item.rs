@@ -71,7 +71,7 @@ impl Item {
     /// darkens to full `muted` on hover, shows a pointing-hand cursor, and the
     /// returned [`Response`] reports clicks. `id_salt` distinguishes sibling
     /// items so their interaction state doesn't collide.
-    pub fn interactive(mut self, id_salt: impl std::hash::Hash) -> Self {
+    pub fn interactive(mut self, id_salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.interactive = Some(egui::Id::new(id_salt));
         self
     }

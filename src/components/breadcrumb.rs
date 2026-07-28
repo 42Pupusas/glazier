@@ -111,7 +111,7 @@ impl Breadcrumb {
     /// Use this whenever more than one `Breadcrumb` might share the same
     /// label + index pairs in the same egui context (e.g. a file-tree
     /// breadcrumb and a CWD breadcrumb in the reasoning panel).
-    pub fn id_salt(mut self, salt: impl std::hash::Hash) -> Self {
+    pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id_salt = Some(egui::Id::new(salt));
         self
     }

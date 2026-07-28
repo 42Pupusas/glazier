@@ -169,7 +169,7 @@ impl Sizeable<NavigationMenuMetrics> for NavigationMenu {
 impl NavigationMenu {
     /// Create an empty navigation menu with a stable `id_salt` (remembers which
     /// panel is open across frames).
-    pub fn new(id_salt: impl std::hash::Hash) -> Self {
+    pub fn new(id_salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
             id_salt: Id::new(id_salt),
             items: Vec::new(),

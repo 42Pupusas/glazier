@@ -211,7 +211,7 @@ impl Sizeable<CommandMetrics> for Command {
 impl Command {
     /// Create an empty palette. `id_salt` keys its persisted filter/highlight
     /// state, so give sibling palettes distinct salts.
-    pub fn new(id_salt: impl std::hash::Hash) -> Self {
+    pub fn new(id_salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
             groups: Vec::new(),
             placeholder: "Type a command or search…".to_owned(),

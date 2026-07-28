@@ -152,7 +152,7 @@ impl<'a> Combobox<'a> {
 
     /// Disambiguate multiple comboboxes sharing one view (keeps each one's
     /// search filter + focus state separate).
-    pub fn id_salt(mut self, salt: impl std::hash::Hash) -> Self {
+    pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id_salt = egui::Id::new(("glazier-combobox", egui::Id::new(salt)));
         self
     }

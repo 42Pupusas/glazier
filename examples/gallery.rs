@@ -394,7 +394,7 @@ fn main() -> eframe::Result {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(tokens.background))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 // Paint a subtle top-to-bottom gradient: the page background
                 // fades from `background` down into `muted` near the bottom.
                 paint_page_gradient(ui, tokens);

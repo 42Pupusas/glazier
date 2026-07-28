@@ -161,7 +161,7 @@ impl Sizeable<MessageScrollerMetrics> for MessageScroller<'_> {
 impl<'a> MessageScroller<'a> {
     /// Create a scroller identified by `id_source` (persists scroll state across
     /// frames).
-    pub fn new(id_source: impl Hash) -> Self {
+    pub fn new(id_source: impl Hash + std::fmt::Debug) -> Self {
         Self {
             id_source: egui::Id::new(id_source),
             auto_scroll: false,

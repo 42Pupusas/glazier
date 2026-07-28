@@ -106,7 +106,7 @@ impl Customize<ResizableStyle> for Resizable {
 
 impl Resizable {
     /// Create a split identified by `id_source` (persists the divider position).
-    pub fn new(id_source: impl std::hash::Hash) -> Self {
+    pub fn new(id_source: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
             id_source: egui::Id::new(id_source),
             direction: Direction::default(),

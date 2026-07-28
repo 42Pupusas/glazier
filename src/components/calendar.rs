@@ -164,7 +164,7 @@ impl<'a> Calendar<'a> {
 
     /// Disambiguate multiple calendars in one view (their visible-month state is
     /// keyed by this salt).
-    pub fn id_salt(mut self, salt: impl std::hash::Hash) -> Self {
+    pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id_salt = egui::Id::new(("glazier-calendar", egui::Id::new(salt)));
         self
     }

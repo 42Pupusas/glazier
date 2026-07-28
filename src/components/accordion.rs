@@ -81,7 +81,7 @@ impl Sizeable<AccordionMetrics> for Accordion<'_> {
 impl<'a> Accordion<'a> {
     /// Create an accordion identified by `id_source` (used to persist each
     /// section's open state across frames).
-    pub fn new(id_source: impl std::hash::Hash) -> Self {
+    pub fn new(id_source: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
             id_source: egui::Id::new(id_source),
             mode: Mode::default(),

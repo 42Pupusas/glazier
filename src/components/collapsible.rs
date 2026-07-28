@@ -71,7 +71,7 @@ impl Collapsible {
     /// with the parent Ui's id-stack — so it is stable and readable from
     /// outside the widget via [`Collapsible::openness`] and
     /// [`Collapsible::is_open`].
-    pub fn new(id_source: impl std::hash::Hash) -> Self {
+    pub fn new(id_source: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
             id_source: egui::Id::new(id_source),
             title: String::new(),
@@ -86,14 +86,14 @@ impl Collapsible {
     ///
     /// Useful for sizing a parent container to match the collapsible's
     /// animated height before the collapsible itself is placed.
-    pub fn openness(ctx: &egui::Context, id_source: impl std::hash::Hash) -> f32 {
+    pub fn openness(ctx: &egui::Context, id_source: impl std::hash::Hash + std::fmt::Debug) -> f32 {
         let id = egui::Id::new(id_source);
         CollapsingState::load_with_default_open(ctx, id, false).openness(ctx)
     }
 
     /// Return whether the collapsible with the given `id_source` is toggled
     /// open (independent of any in-progress animation).
-    pub fn is_open(ctx: &egui::Context, id_source: impl std::hash::Hash) -> bool {
+    pub fn is_open(ctx: &egui::Context, id_source: impl std::hash::Hash + std::fmt::Debug) -> bool {
         let id = egui::Id::new(id_source);
         CollapsingState::load_with_default_open(ctx, id, false).is_open()
     }

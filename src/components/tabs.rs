@@ -166,7 +166,7 @@ impl<'a> Tabs<'a> {
 
     /// Set a stable id seed, disambiguating the scroll area and per-trigger drag
     /// state when several tab rows live under one parent id.
-    pub fn id_salt(mut self, salt: impl std::hash::Hash) -> Self {
+    pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id_salt = Some(Id::new(salt));
         self
     }

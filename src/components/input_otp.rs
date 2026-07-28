@@ -145,7 +145,7 @@ impl<'a> InputOtp<'a> {
     }
 
     /// Set a stable id salt (needed if several OTP fields share a parent).
-    pub fn id_salt(mut self, salt: impl std::hash::Hash) -> Self {
+    pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id_salt = egui::Id::new(salt);
         self
     }
