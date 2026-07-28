@@ -433,7 +433,7 @@ impl Chart {
         }
         #[allow(clippy::cast_precision_loss)]
         let span = self.series.len().saturating_sub(1) as f32;
-        total += gap * span;
+        total = gap.mul_add(span, total);
 
         let mut x = area.center().x - total / 2.0;
         let cy = area.center().y;

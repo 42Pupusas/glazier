@@ -340,7 +340,7 @@ impl Bubble {
         }
         #[allow(clippy::cast_precision_loss)]
         let span = self.reactions.len().saturating_sub(1) as f32;
-        total += gap * span;
+        total = gap.mul_add(span, total);
 
         let center_y = match self.reactions_side {
             Side::Top => bubble.top(),
