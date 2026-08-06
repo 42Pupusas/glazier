@@ -438,6 +438,7 @@ impl BubbleGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     #[test]
     fn ghost_is_unframed_and_full_width() {
@@ -471,7 +472,7 @@ mod tests {
     #[test]
     fn renders_aligns_and_reactions() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             Bubble::new(Variant::Secondary).show(ui, |ui| {
                 ui.label("hi");
             });

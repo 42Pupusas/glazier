@@ -62,6 +62,7 @@ impl ContextMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
     use egui::Widget as _;
 
     /// Without a right-click the menu stays closed and reports no selection.
@@ -69,7 +70,7 @@ mod tests {
     fn closed_by_default() {
         let ctx = egui::Context::default();
         let mut picked = Some(0);
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let target = egui::Button::new("target").ui(ui);
             let menu = DropdownMenu::new().item("One").item("Two");
             picked = ContextMenu::new(menu).show(ui, &target);

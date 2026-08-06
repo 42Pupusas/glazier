@@ -107,13 +107,14 @@ impl Field {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// The control closure's value is forwarded.
     #[test]
     fn forwards_content_value() {
         let ctx = egui::Context::default();
         let mut got = 0;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             got = Field::new("Name").show(ui, |_| 42);
         });
         assert_eq!(got, 42);
@@ -123,7 +124,7 @@ mod tests {
     #[test]
     fn error_renders() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             Field::new("Email")
                 .description("hidden when invalid")
                 .error("required")

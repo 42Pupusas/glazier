@@ -428,7 +428,10 @@ impl Attachment {
             );
         }
 
-        if self.state.is_busy() {
+        // A busy chip needs frames to advance its in-place colour pulse. Only
+        // request them while it is visible: an off-screen attachment cannot
+        // contribute pixels, so retaining a timer for it would waste redraws.
+        if ui.is_rect_visible(rect) && self.state.is_busy() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(33));
         }
@@ -601,6 +604,44 @@ mod tests {
         assert_eq!(human_size(1024), "1.0 KB");
         assert_eq!(human_size(284_103), "277 KB");
         assert_eq!(human_size(1_572_864), "1.5 MB");
+    }
+
+    /// A busy attachment that is scrolled OFF-SCREEN must go quiet.
+    ///
+    /// The regression this pins: the shimmer's `request_after` sat outside
+    /// the `is_rect_visible` branch, so a busy chip below the fold kept its
+    /// 30fps cadence armed while painting nothing. In the gallery that read
+    /// as "the CPU explodes only after I scroll": the scroll woke the page
+    /// once, the invisible chip re-armed every pass from then on, and the
+    /// window never idled again. Off-screen must mean silent — the same rule
+    /// the painting already follows.
+    #[test]
+    fn an_offscreen_busy_attachment_requests_no_frames() {
+        let ui = crate::test_ui::TestUi::new();
+
+        // Several passes: the first frames legitimately carry startup
+        // repaints (font atlas, initial layout), so judge only the last.
+        let mut delay = std::time::Duration::ZERO;
+        for _ in 0..6 {
+            let output = ui.frame(|ui| {
+                // Push the chip far past the 600pt-tall test viewport; its
+                // rect stays real but `is_rect_visible` is false, exactly as
+                // for a card below the fold of a scrolled page.
+                ui.add_space(5_000.0);
+                let _ = Attachment::new("design-system.fig")
+                    .size_bytes(8_490_000)
+                    .state(State::Uploading)
+                    .width(280.0)
+                    .show(ui);
+            });
+            delay = crate::test_ui::TestUi::repaint_delay(&output);
+        }
+
+        assert!(
+            delay > std::time::Duration::from_secs(1000),
+            "an off-screen busy attachment still scheduled a frame ({delay:?}) \
+             — it should paint nothing and request nothing"
+        );
     }
 
     #[test]

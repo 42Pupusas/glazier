@@ -210,10 +210,11 @@ impl<'a> Sidebar<'a> {
         let mut collapsed: bool = ui.data(|d| d.get_temp(id).unwrap_or(false));
         let mut toggled = false;
 
-        // Animated width: 0 = expanded, 1 = collapsed.
-        let t = ui
-            .ctx()
-            .animate_bool_with_time(id.with("anim"), collapsed, m.anim);
+        // A structural layout transition requests frames until it finishes.
+        // Resolve it immediately so a retained Wayland hover/input snapshot
+        // cannot keep the whole application repainting in the background.
+        let _ = m.anim;
+        let t = f32::from(collapsed);
         let width = egui::lerp(expanded_w..=collapsed_w, t);
         let height = self.height.unwrap_or_else(|| ui.available_height());
 
@@ -404,9 +405,9 @@ fn edge_rail(ui: &Ui, tokens: Tokens, m: SidebarMetrics, rect: Rect, id: Id) -> 
     let resp = ui
         .interact(rail_rect, id.with("rail"), Sense::click())
         .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
-    let hot = ui
-        .ctx()
-        .animate_bool_with_time(id.with("rail-hot"), resp.hovered(), 0.12);
+    // Render the hover state directly; a fade here would schedule a frame
+    // clock while a Wayland surface retains its last pointer coordinate.
+    let hot = f32::from(resp.hovered());
     if hot > 0.01 {
         ui.painter().vline(
             rect.right(),
@@ -419,9 +420,9 @@ fn edge_rail(ui: &Ui, tokens: Tokens, m: SidebarMetrics, rect: Rect, id: Id) -> 
 
 /// Paint a ghost icon-button (accent fill on hover) with the panel-left glyph.
 fn paint_trigger(ui: &Ui, tokens: Tokens, rect: Rect, hovered: bool) {
-    let hot = ui
-        .ctx()
-        .animate_bool_with_time(rect.center().to_pos2_id(), hovered, 0.12);
+    // See `edge_rail`: static hover feedback avoids an unbounded repaint
+    // request when the native window is no longer receiving pointer events.
+    let hot = f32::from(hovered);
     if hot > 0.01 {
         ui.painter()
             .rect_filled(rect, tokens.radius_md(), tokens.accent.gamma_multiply(hot));
@@ -435,26 +436,16 @@ fn paint_trigger(ui: &Ui, tokens: Tokens, rect: Rect, hovered: bool) {
         .paint_at(ui, irect);
 }
 
-/// A tiny extension giving a stable [`Id`] from a position (for hover anim).
-trait PosId {
-    fn to_pos2_id(self) -> Id;
-}
-
-impl PosId for egui::Pos2 {
-    fn to_pos2_id(self) -> Id {
-        Id::new(("glazier-sb-trig", self.x.to_bits(), self.y.to_bits()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// Collapsed state round-trips through memory via `toggle` / `is_collapsed`.
     #[test]
     fn toggle_round_trips() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             assert!(!is_collapsed(ui, "x"));
             toggle(ui, "x");
             assert!(is_collapsed(ui, "x"));
@@ -467,7 +458,7 @@ mod tests {
     #[test]
     fn renders() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let r = Sidebar::new("app")
                 .height(300.0)
                 .header(|ui, c| {

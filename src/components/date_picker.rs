@@ -414,6 +414,7 @@ fn parse_long(s: &str) -> Option<Date> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// The trigger label formats a selected date the long way.
     #[test]
@@ -449,7 +450,7 @@ mod tests {
     fn show_without_interaction_keeps_selection() {
         let ctx = egui::Context::default();
         let mut date = Some(Date::new(2025, 6, 24));
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let changed = DatePicker::new(&mut date).show(ui);
             assert!(!changed);
         });

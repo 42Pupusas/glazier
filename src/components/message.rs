@@ -160,8 +160,9 @@ impl Message {
         self
     }
 
-    /// Set the header line (a muted sender name above the bubble). Always
-    /// aligned to the start, regardless of [`align`](Message::align).
+    /// Set the header line (a muted sender name above the bubble). Follows the
+    /// message side, like [`footer`](Message::footer) — the name sits above the
+    /// bubble it labels rather than across the row from it.
     pub fn header(mut self, header: impl Into<String>) -> Self {
         self.header = Some(header.into());
         self
@@ -242,15 +243,21 @@ impl Message {
             ui.allocate_ui_with_layout(Vec2::new(col_w, 0.0), layout, |ui| {
                 ui.spacing_mut().item_spacing.y = m.stack_gap;
 
-                // Header: muted sender name, always start-aligned.
+                // Header: muted sender name, following the message side.
+                //
+                // It must track `align` for the same reason the footer does:
+                // the header *names the speaker of this bubble*, so pinning it
+                // to the start on an end-aligned row leaves the name stranded
+                // at the far left while the bubble hugs the right, reading as
+                // a label for whatever sits above it. Header and footer are
+                // both bubble metadata; only the bubble's side should decide
+                // where they sit.
                 if let Some(header) = &self.header {
-                    ui.with_layout(egui::Layout::top_down(Align::Min), |ui| {
-                        ui.label(
-                            RichText::new(header)
-                                .color(tokens.muted_foreground)
-                                .size(m.header_text),
-                        );
-                    });
+                    ui.label(
+                        RichText::new(header)
+                            .color(tokens.muted_foreground)
+                            .size(m.header_text),
+                    );
                 }
 
                 // Bubble surface.
@@ -370,7 +377,7 @@ mod tests {
     #[test]
     fn renders_both_sides() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::test_ui::RunHeadless::run_headless(&ctx, |ui| {
             let r = Message::new()
                 .avatar(Avatar::new("Ada Lovelace"))
                 .header("Ada")
@@ -387,5 +394,86 @@ mod tests {
                 Message::new().align(Side::End).show(ui, |ui| ui.label("b"));
             });
         });
+    }
+
+    /// The header must sit on the same side as the bubble it names.
+    ///
+    /// It used to be hardcoded to `Align::Min`, which stranded the sender
+    /// name at the far left of an end-aligned row while the bubble hugged
+    /// the right — the name then read as a label for the row above it.
+    /// Asserted against the footer, which has always followed the side:
+    /// the two are both bubble metadata and must agree.
+    #[test]
+    fn header_follows_the_message_side() {
+        for side in [Side::Start, Side::End] {
+            let probe = HeaderProbe::render(side);
+
+            // Header and footer are both bubble metadata, and the footer has
+            // always tracked the side correctly — so the footer is the oracle.
+            assert!(
+                (probe.header_x - probe.footer_x).abs() < 1.0,
+                "{side:?}: header and footer disagree about which side they \
+                 belong to (header at {}, footer at {})",
+                probe.header_x,
+                probe.footer_x
+            );
+
+            // And that shared side is genuinely the bubble's own.
+            match side {
+                Side::Start => assert!(
+                    (probe.header_x - probe.bubble.left()).abs() < 4.0,
+                    "start-aligned header drifted off the left of its bubble"
+                ),
+                Side::End => assert!(
+                    probe.header_x > probe.bubble.center().x,
+                    "end-aligned header stayed pinned to the left while the \
+                     bubble hugged the right"
+                ),
+            }
+        }
+    }
+
+    /// Renders one [`Message`] and recovers where its header, footer and
+    /// bubble actually landed.
+    ///
+    /// Reads the *painted* text shapes rather than reasoning about layout
+    /// rects, because the bug being guarded against is precisely a layout
+    /// override: anything derived from the same layout pass could agree with
+    /// the bug and still pass. The pixels are the ground truth.
+    struct HeaderProbe {
+        /// Left edge of the painted header galley.
+        header_x: f32,
+        /// Left edge of the painted footer galley.
+        footer_x: f32,
+        /// The bubble surface both are supposed to hug.
+        bubble: Rect,
+    }
+
+    impl HeaderProbe {
+        /// Header text, chosen to be unique among the painted galleys.
+        const HEADER: &'static str = "Ada";
+        /// Footer text, likewise unique.
+        const FOOTER: &'static str = "Delivered";
+
+        /// Draw a message on `side` and collect the probe.
+        fn render(side: Side) -> Self {
+            let ui = crate::test_ui::TestUi::new();
+            let mut bubble = Rect::NOTHING;
+            let output = ui.frame(|ui| {
+                bubble = Message::new()
+                    .align(side)
+                    .avatar(Avatar::new("Ada Lovelace"))
+                    .header(Self::HEADER)
+                    .footer(Self::FOOTER)
+                    .show(ui, |ui| ui.label("hi"))
+                    .bubble_rect;
+            });
+
+            Self {
+                header_x: crate::test_ui::TestUi::text_x(&output, Self::HEADER),
+                footer_x: crate::test_ui::TestUi::text_x(&output, Self::FOOTER),
+                bubble,
+            }
+        }
     }
 }

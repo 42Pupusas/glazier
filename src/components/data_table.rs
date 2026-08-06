@@ -566,6 +566,7 @@ fn hairline(ui: &mut Ui, total: f32, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     fn sample() -> DataTable {
         DataTable::new("t")
@@ -632,7 +633,7 @@ mod tests {
     #[test]
     fn renders() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let _ = sample().show(ui);
         });
     }

@@ -266,18 +266,22 @@ fn paint_shimmer(
     ui.painter()
         .with_clip_rect(clip)
         .galley(pos, bright, tokens.foreground);
+    // This is a travelling band, so it needs a normal frame cadence to remain
+    // smooth. Visibility is already established by the caller before this
+    // painter runs, so an off-screen marker never schedules work.
     ui.ctx().request_repaint();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// Every variant renders and spans the available width without panicking.
     #[test]
     fn variants_render() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             for variant in [Variant::Default, Variant::Border, Variant::Separator] {
                 let r = Marker::new("status").variant(variant).ui(ui);
                 assert!(r.rect.height() > 0.0);

@@ -313,13 +313,14 @@ impl Widget for Pagination {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// First page renders and reports no change without input.
     #[test]
     fn stable_without_input() {
         let ctx = egui::Context::default();
         let mut changed = true;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let mut page = 0;
             changed = Pagination::new(12).show(ui, &mut page);
         });
@@ -345,7 +346,7 @@ mod tests {
     fn clamps_overflow() {
         let ctx = egui::Context::default();
         let mut page = 999;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             Pagination::new(5).show(ui, &mut page);
         });
         assert!(page < 5);

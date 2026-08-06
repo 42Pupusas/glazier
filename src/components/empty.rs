@@ -172,6 +172,7 @@ fn media_tile(ui: &mut Ui, tokens: Tokens, icon: Icon, m: EmptyMetrics) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
     use egui::Widget as _;
 
     /// The action slot's return value is forwarded.
@@ -179,7 +180,7 @@ mod tests {
     fn forwards_content_value() {
         let ctx = egui::Context::default();
         let mut got = None;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             got = Empty::new("Nothing here").show(ui, |_| 7);
         });
         assert_eq!(got, Some(7));
@@ -189,7 +190,7 @@ mod tests {
     #[test]
     fn widget_form_renders() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let _ = Empty::new("Empty").description("nada").ui(ui);
         });
     }

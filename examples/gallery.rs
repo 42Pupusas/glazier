@@ -2382,7 +2382,10 @@ fn conversation_card(ui: &mut egui::Ui, state: &mut State) {
 
             // A streaming status marker pinned to the live edge.
             scroller = scroller.item("typing", false, |ui| {
-                Marker::new("Riley is typing\u{2026}").shimmer(true).ui(ui);
+                // Keep the gallery representative without running a continuous shimmer
+                // animation while this showcase is idle. Applications that need a
+                // streaming affordance can still opt into `Marker::shimmer(true)`.
+                Marker::new("Riley is typing\u{2026}").ui(ui);
             });
 
             scroller.show(ui);

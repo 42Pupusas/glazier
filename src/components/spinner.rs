@@ -147,13 +147,14 @@ impl Widget for Spinner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// A spinner allocates its requested square and is hover-only.
     #[test]
     fn allocates_requested_size() {
         let ctx = egui::Context::default();
         let mut size = Vec2::ZERO;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let r = Spinner::new().size(24.0).ui(ui);
             size = r.rect.size();
         });

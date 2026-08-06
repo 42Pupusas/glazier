@@ -325,13 +325,14 @@ impl Widget for Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// A populated table renders without panicking and reports no click.
     #[test]
     fn renders_rows() {
         let ctx = egui::Context::default();
         let mut clicked = Some(0);
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             clicked = Table::new()
                 .column("A", Sizing::Auto, Align::LEFT)
                 .column("B", Sizing::Remainder, Align::RIGHT)
@@ -346,7 +347,7 @@ mod tests {
     #[test]
     fn widths_fill_total() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let table = Table::new()
                 .column("A", Sizing::Exact(100.0), Align::LEFT)
                 .column("B", Sizing::Remainder, Align::LEFT);

@@ -264,13 +264,14 @@ impl Widget for Carousel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// A carousel renders and reports no change without input.
     #[test]
     fn stable_without_input() {
         let ctx = egui::Context::default();
         let mut changed = true;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             let mut idx = 0;
             changed = Carousel::new(4).show(ui, &mut idx, |ui, i| {
                 ui.label(format!("{i}"));
@@ -284,7 +285,7 @@ mod tests {
     fn clamps_overflow() {
         let ctx = egui::Context::default();
         let mut idx = 99;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             Carousel::new(3).show(ui, &mut idx, |_, _| {});
         });
         assert!(idx < 3);

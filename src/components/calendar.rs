@@ -455,6 +455,7 @@ impl Widget for Calendar<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// Known weekdays: 2000-01-01 was a Saturday (6); 2025-01-01 a Wednesday (3).
     #[test]
@@ -502,7 +503,7 @@ mod tests {
     fn show_reports_change() {
         let ctx = egui::Context::default();
         let mut sel = None;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             Calendar::new(&mut sel).show(ui);
         });
     }

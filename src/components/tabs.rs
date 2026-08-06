@@ -291,15 +291,24 @@ fn list_inner(
         0.0
     };
 
-    // Animate the active chip's x-position so it slides between tabs; while the
-    // active tab is being dragged, follow the pointer via its offset.
-    let target_x = track.left() + left_of(*active) + active_offset;
-    let chip_x = if active_offset.abs() > 0.5 {
-        target_x // don't animate while actively dragging — track the pointer
-    } else {
-        ui.ctx()
-            .animate_value_with_time(response.id.with("chip_x"), target_x, m.anim_time)
-    };
+    // Animate the active chip so it slides between tabs; while the active tab
+    // is being dragged, follow the pointer via its offset.
+    //
+    // Animate the chip's offset *within the track*, not its absolute screen x.
+    // The absolute coordinate moves whenever the page scrolls (the whole strip
+    // translates), so animating it made the chip chase every scroll tick —
+    // re-arming `anim_time` of repaints per tick and visibly lagging the strip.
+    // The track-relative offset only changes when the *selection* changes,
+    // which is exactly the movement the slide animation is for; scroll
+    // translation lands via `track.left()` instantly, as it must.
+    let target_offset = left_of(*active) + active_offset;
+    let chip_x = track.left()
+        + if active_offset.abs() > 0.5 {
+            target_offset // don't animate while actively dragging — track the pointer
+        } else {
+            ui.ctx()
+                .animate_value_with_time(response.id.with("chip_x"), target_offset, m.anim_time)
+        };
     let chip_w = widths[*active];
 
     if ui.is_rect_visible(track) {

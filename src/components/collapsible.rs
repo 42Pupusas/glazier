@@ -148,11 +148,11 @@ impl Collapsible {
         }
 
         if ui.is_rect_visible(rect) {
-            let hover_t = ui.ctx().animate_bool_with_time(
-                header.id.with("hover"),
-                header.hovered(),
-                m.hover_time,
-            );
+            // Hover must not become a frame clock. A background Wayland
+            // surface can retain its old pointer position indefinitely, so
+            // resolve the visual state directly instead of animating it.
+            let _ = m.hover_time;
+            let hover_t = f32::from(header.hovered());
             let text_col = tokens
                 .foreground
                 .gamma_multiply(0.9)

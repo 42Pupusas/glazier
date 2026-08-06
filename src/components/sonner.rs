@@ -734,7 +734,7 @@ mod tests {
     #[test]
     fn empty_show_is_noop() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        crate::test_ui::RunHeadless::run_headless(&ctx, |_| {});
         Toaster::new().show(&ctx);
         let len: usize = ctx.data(|d| {
             d.get_temp::<Vec<LiveToast>>(queue_id())

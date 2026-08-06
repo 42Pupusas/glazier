@@ -517,11 +517,11 @@ mod tests {
                     ui.label("turn");
                 })
         };
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::test_ui::RunHeadless::run_headless(&ctx, |ui| {
             build().show(ui);
         });
         // Second frame: `opened` is now true, exercising the anchor/edge logic.
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::test_ui::RunHeadless::run_headless(&ctx, |ui| {
             build().show(ui);
         });
     }

@@ -33,6 +33,11 @@ mod customize;
 mod decorate;
 pub mod fonts;
 mod sizing;
+
+// Test-only harness: it owns headless-frame cleanup without expanding the
+// library's public API.
+#[cfg(test)]
+mod test_ui;
 pub mod tokens;
 mod widgets;
 

@@ -209,6 +209,7 @@ impl Sheet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::RunHeadless as _;
 
     /// Driving a closed sheet must paint nothing and forward `None`.
     #[test]
@@ -217,7 +218,7 @@ mod tests {
         let mut open = false;
         let mut ran = false;
         let mut out = Some(0);
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             out = Sheet::new("Edit profile").show(ui.ctx(), &mut open, |_| {
                 ran = true;
                 42
@@ -233,7 +234,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut open = true;
         let mut out = None;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_headless(|ui| {
             out = Sheet::new("Edit profile")
                 .side(Side::Left)
                 .show(ui.ctx(), &mut open, |_| 7);

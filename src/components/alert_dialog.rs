@@ -281,7 +281,10 @@ mod tests {
             )),
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        // Keeps its own `RawInput` (the test varies `screen_rect`), so it
+        // discharges the texture delta itself rather than going through
+        // `RunHeadless` — see `test_ui` for why dropping one would panic.
+        let mut output = ctx.run_ui(input, |ui| {
             AlertDialog::new("Allow accessory to connect?")
                 .description(
                     "Do you want to allow the USB accessory to connect? \
@@ -291,6 +294,7 @@ mod tests {
                 .action("Allow")
                 .show(ui.ctx(), open);
         });
+        output.textures_delta.clear();
         let card_id = egui::Id::new("glazier-alert-dialog").with("card_size");
         ctx.data(|d| d.get_temp::<Vec2>(card_id))
             .unwrap_or(Vec2::ZERO)
