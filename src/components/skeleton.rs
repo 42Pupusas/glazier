@@ -54,7 +54,14 @@ impl Widget for Skeleton {
             let fill = base.gamma_multiply(0.4f32.mul_add(t, 0.6));
             ui.painter().rect_filled(rect, self.radius, fill);
 
-            ui.ctx().request_repaint(); // keep the pulse going
+            // An in-place alpha pulse has no travelling edge, so the cheaper
+            // GRADIENT cadence reads identically. Via `Repaint` so the pulse
+            // is labelled and visible to a paint-caching host.
+            crate::repaint::Repaint::request_after(
+                ui.ctx(),
+                "skeleton.pulse",
+                crate::repaint::Repaint::GRADIENT,
+            );
         }
 
         response

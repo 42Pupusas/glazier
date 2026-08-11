@@ -431,9 +431,16 @@ impl Attachment {
         // A busy chip needs frames to advance its in-place colour pulse. Only
         // request them while it is visible: an off-screen attachment cannot
         // contribute pixels, so retaining a timer for it would waste redraws.
+        // Via `Repaint` so the request enforces its cadence as a real
+        // interval (a bare `request_repaint_after` is only a deadline) and is
+        // visible to a paint-caching host, which must not replay an
+        // animating chip.
         if ui.is_rect_visible(rect) && self.state.is_busy() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(33));
+            crate::repaint::Repaint::request_after(
+                ui.ctx(),
+                "attachment.busy",
+                crate::repaint::Repaint::GRADIENT,
+            );
         }
 
         AttachmentResponse { response, removed }

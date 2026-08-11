@@ -32,6 +32,7 @@ pub mod components;
 mod customize;
 mod decorate;
 pub mod fonts;
+pub mod repaint;
 mod sizing;
 
 // Test-only harness: it owns headless-frame cleanup without expanding the
@@ -73,6 +74,7 @@ pub use components::{
 pub use customize::{Customize, StyleHook};
 pub use decorate::{Decorate, Styled};
 pub use fonts::install as install_fonts;
+pub use repaint::Repaint;
 pub use sizing::{Sizeable, SizingHook};
 pub use tokens::{apply_style, shadcn_visuals, shadcn_visuals_from, Tokens};
 pub use widgets::ChatBubble;

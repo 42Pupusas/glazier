@@ -137,7 +137,15 @@ impl Widget for Spinner {
                 prev = Some(p);
             }
 
-            ui.ctx().request_repaint(); // keep spinning
+            // Rotation is motion — an edge the eye tracks — so it takes the
+            // MOTION cadence. Via `Repaint` so the request is labelled and
+            // visible to a paint-caching host (a raw request would let a
+            // cached region freeze this spinner mid-turn).
+            crate::repaint::Repaint::request_after(
+                ui.ctx(),
+                "spinner",
+                crate::repaint::Repaint::MOTION,
+            );
         }
 
         response

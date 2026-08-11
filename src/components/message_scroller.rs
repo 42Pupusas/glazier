@@ -29,6 +29,7 @@
 //! [`default_position`]: MessageScroller::default_position
 //! [`true`]: MessageScroller::item
 
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use egui::{Align, Response, Sense, Ui, Vec2};
@@ -101,6 +102,23 @@ enum Pending {
     #[default]
     None,
     End,
+}
+
+/// Extra content above and below the viewport that remains fully rendered.
+///
+/// The overscan keeps row heights warm and prevents blank flashes during a
+/// fast scroll while still avoiding expensive Markdown/layout work for the
+/// distant majority of a long transcript.
+const CULL_MARGIN: f32 = 800.0;
+
+/// Measured row geometry used to virtualize variable-height transcript items.
+///
+/// This is separate from [`ScrollerState`] because the latter is deliberately
+/// small and `Copy`, while a transcript can have many cached row heights.
+#[derive(Clone, Default)]
+struct HeightCache {
+    width: f32,
+    heights: HashMap<u64, f32>,
 }
 
 /// One transcript row.
@@ -364,6 +382,12 @@ impl<'a> MessageScroller<'a> {
         let peek = self.peek;
         let auto_scroll = self.auto_scroll;
         let items = self.items;
+        let live_ids: HashSet<u64> = items.iter().map(|item| item.id).collect();
+        let cache_id = id.with("row_heights");
+        let mut cache: HeightCache = ui
+            .ctx()
+            .data_mut(|data| data.get_temp(cache_id))
+            .unwrap_or_default();
         let content_right_pad = self.content_right_pad;
         // Account for the scrollbar width so content doesn't slide under the
         // thumb when the bar is visible.
@@ -386,10 +410,39 @@ impl<'a> MessageScroller<'a> {
                 ui.set_width(ui.available_width() - right_reserve);
                 ui.spacing_mut().item_spacing.y = 12.0;
 
+                // Wrapping determines message height, so every cached height
+                // becomes invalid as soon as the content width changes.
+                let width = ui.available_width();
+                if (cache.width - width).abs() > 0.5 {
+                    cache.width = width;
+                    cache.heights.clear();
+                }
+
+                let clip = ui.clip_rect();
+                let visible_top = clip.top() - CULL_MARGIN;
+                let visible_bottom = clip.bottom() + CULL_MARGIN;
                 let mut first_rect = None;
                 let mut last_anchor_rect = None;
                 for item in items {
-                    let rect = ui.scope(item.content).response.rect;
+                    let top = ui.cursor().top();
+                    let known_height = cache.heights.get(&item.id).copied();
+                    let offscreen = known_height
+                        .is_some_and(|height| top + height < visible_top || top > visible_bottom);
+
+                    // A ScrollArea clips painting, but its ordinary `show`
+                    // still executes and lays out every child. For a distant
+                    // row with known geometry, reserve the same rectangle and
+                    // skip its potentially expensive closure altogether.
+                    // The placeholder rect also keeps Start/AnchorTop actions
+                    // correct when their target itself is currently culled.
+                    let rect = if let Some(height) = known_height.filter(|_| offscreen) {
+                        let (_, rect) = ui.allocate_space(Vec2::new(width, height));
+                        rect
+                    } else {
+                        let rect = ui.scope(item.content).response.rect;
+                        cache.heights.insert(item.id, rect.height());
+                        rect
+                    };
                     if first_rect.is_none() {
                         first_rect = Some(rect);
                     }
@@ -399,6 +452,8 @@ impl<'a> MessageScroller<'a> {
                 }
 
                 apply_action(ui, action, first_rect, last_anchor_rect, peek);
+                cache.heights.retain(|row_id, _| live_ids.contains(row_id));
+                ui.ctx().data_mut(|data| data.insert_temp(cache_id, cache));
             })
         };
 
@@ -524,6 +579,45 @@ mod tests {
         crate::test_ui::RunHeadless::run_headless(&ctx, |ui| {
             build().show(ui);
         });
+    }
+
+    /// Once heights are known, distant rows skip their content closures.
+    #[test]
+    fn culls_measured_rows_outside_the_viewport() {
+        use std::cell::Cell;
+
+        let ctx = egui::Context::default();
+        let rendered = Cell::new(0);
+        let draw = || {
+            let mut scroller = MessageScroller::new("culled").max_height(120.0);
+            for row in 0..100 {
+                scroller = scroller.item(row, false, |ui| {
+                    rendered.set(rendered.get() + 1);
+                    ui.allocate_space(Vec2::new(100.0, 40.0));
+                });
+            }
+            scroller
+        };
+
+        crate::test_ui::RunHeadless::run_headless(&ctx, |ui| {
+            draw().show(ui);
+        });
+        assert_eq!(rendered.get(), 100, "the first pass must measure every row");
+
+        // The scrollbar appearing can change the usable content width on the
+        // second pass, correctly invalidating heights measured without it.
+        crate::test_ui::RunHeadless::run_headless(&ctx, |ui| {
+            draw().show(ui);
+        });
+
+        rendered.set(0);
+        crate::test_ui::RunHeadless::run_headless(&ctx, |ui| {
+            draw().show(ui);
+        });
+        assert!(
+            rendered.get() < 100,
+            "measured off-screen rows unexpectedly rendered again"
+        );
     }
 
     /// Stable ids hash deterministically; distinct ids differ.

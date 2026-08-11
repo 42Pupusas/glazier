@@ -266,10 +266,20 @@ fn paint_shimmer(
     ui.painter()
         .with_clip_rect(clip)
         .galley(pos, bright, tokens.foreground);
-    // This is a travelling band, so it needs a normal frame cadence to remain
-    // smooth. Visibility is already established by the caller before this
-    // painter runs, so an off-screen marker never schedules work.
-    ui.ctx().request_repaint();
+    // A travelling band has an edge the eye can follow, so it takes the
+    // MOTION cadence. Scheduling through `Repaint` (rather than a raw
+    // `request_repaint`) matters twice over: it enforces the cadence as a
+    // real interval instead of a busy loop, and it makes the animation
+    // *attributable* — a paint-caching host can only exempt animating
+    // content from replay when the request is visible to it, so a raw
+    // request here would freeze the shimmer inside a cached region.
+    // Visibility is already established by the caller before this painter
+    // runs, so an off-screen marker never schedules work.
+    crate::repaint::Repaint::request_after(
+        ui.ctx(),
+        "marker.shimmer",
+        crate::repaint::Repaint::MOTION,
+    );
 }
 
 #[cfg(test)]
