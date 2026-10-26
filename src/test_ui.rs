@@ -4,7 +4,7 @@
 //! setup here prevents each component test from inventing a slightly different
 //! approximation of an egui frame.
 
-use egui::{Context, FullOutput, RawInput, Ui};
+use egui::{Context, Event, FullOutput, Key, Modifiers, Pos2, RawInput, Ui};
 
 /// A headless egui context for layout and paint assertions.
 pub struct TestUi {
@@ -24,18 +24,82 @@ impl TestUi {
         }
     }
 
+    /// The context frames run on.
+    #[must_use]
+    pub const fn ctx(&self) -> &Context {
+        &self.ctx
+    }
+
     /// Render one 60 Hz frame and return its paint output.
     pub fn frame(&self, build: impl FnMut(&mut Ui)) -> FullOutput {
         self.time.set(self.time.get() + 1.0 / 60.0);
         self.frame_now(build)
     }
 
+    /// Render one 60 Hz frame that receives `events` as its input.
+    pub fn frame_with(&self, events: Vec<Event>, build: impl FnMut(&mut Ui)) -> FullOutput {
+        self.time.set(self.time.get() + 1.0 / 60.0);
+        self.frame_input(events, build)
+    }
+
+    /// Press and release the primary button at `pos`, over two frames, so
+    /// widgets see a complete click.
+    pub fn click(&self, pos: Pos2, mut build: impl FnMut(&mut Ui)) -> FullOutput {
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.frame_with(vec![Event::PointerMoved(pos), button(true)], &mut build);
+        self.frame_with(vec![button(false)], &mut build)
+    }
+
+    /// Press the primary button at `from`, drag to `to` in small steps, and
+    /// release, returning the output of the release frame.
+    pub fn drag(&self, from: Pos2, to: Pos2, mut build: impl FnMut(&mut Ui)) -> FullOutput {
+        const STEPS: u8 = 8;
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.frame_with(
+            vec![Event::PointerMoved(from), button(from, true)],
+            &mut build,
+        );
+        for step in 1..=STEPS {
+            let pos = from.lerp(to, f32::from(step) / f32::from(STEPS));
+            self.frame_with(vec![Event::PointerMoved(pos)], &mut build);
+        }
+        self.frame_with(vec![button(to, false)], &mut build)
+    }
+
+    /// A bare key press, as winit delivers it.
+    #[must_use]
+    pub const fn key(key: Key) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
     /// Render one frame at the current clock reading, without advancing it.
     fn frame_now(&self, build: impl FnMut(&mut Ui)) -> FullOutput {
+        self.frame_input(Vec::new(), build)
+    }
+
+    /// Render one frame at the current clock reading with `events` as input.
+    fn frame_input(&self, events: Vec<Event>, build: impl FnMut(&mut Ui)) -> FullOutput {
         let mut output = self.ctx.run_ui(
             RawInput {
                 time: Some(self.time.get()),
                 focused: true,
+                events,
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::pos2(0.0, 0.0),
                     egui::vec2(800.0, 600.0),
@@ -110,11 +174,23 @@ impl TestUi {
     /// Panics when the expected text was not painted.
     #[must_use]
     pub fn text_x(output: &FullOutput, needle: &str) -> f32 {
+        Self::text_rect(output, needle).left()
+    }
+
+    /// The screen rect `needle` was painted into.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the expected text was not painted.
+    #[must_use]
+    pub fn text_rect(output: &FullOutput, needle: &str) -> egui::Rect {
         output
             .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.job.text == needle => Some(text.pos.x),
+                egui::Shape::Text(text) if text.galley.job.text == needle => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("never painted the text {needle:?}"))

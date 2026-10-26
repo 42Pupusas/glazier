@@ -112,7 +112,7 @@ impl Breadcrumb {
     /// label + index pairs in the same egui context (e.g. a file-tree
     /// breadcrumb and a CWD breadcrumb in the reasoning panel).
     pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id_salt = Some(egui::Id::new(salt));
+        self.id_salt = Some(egui::Id::unique(salt));
         self
     }
 
@@ -235,7 +235,7 @@ fn crumb_text(
     let (_, rect) = ui.allocate_space(Vec2::new(galley.size().x, m.row_h()));
 
     let (resp, color) = if interactive {
-        let id = egui::Id::new(("glazier-breadcrumb", label, idx)).with(salt);
+        let id = egui::Id::unique(("glazier-breadcrumb", label, idx)).with(salt);
         let resp = ui
             .interact(rect, id, Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -250,7 +250,7 @@ fn crumb_text(
         (
             ui.interact(
                 rect,
-                egui::Id::new(("glazier-breadcrumb-page", label, idx)).with(salt),
+                egui::Id::unique(("glazier-breadcrumb-page", label, idx)).with(salt),
                 Sense::hover(),
             ),
             tokens.foreground,
@@ -287,7 +287,7 @@ fn ellipsis_button(
     m: BreadcrumbMetrics,
 ) -> Response {
     let (_, rect) = ui.allocate_space(Vec2::splat(m.ellipsis_btn));
-    let id = egui::Id::new(("glazier-breadcrumb-ellipsis", idx)).with(salt);
+    let id = egui::Id::unique(("glazier-breadcrumb-ellipsis", idx)).with(salt);
     let resp = ui
         .interact(rect, id, Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);

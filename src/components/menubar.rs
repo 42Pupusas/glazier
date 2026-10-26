@@ -107,7 +107,7 @@ impl Menubar {
     /// menu is open across frames).
     pub fn new(id_salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
-            id_salt: Id::new(id_salt),
+            id_salt: Id::unique(id_salt),
             menus: Vec::new(),
             sizing_hook: SizingHook::new(),
         }

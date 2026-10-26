@@ -101,6 +101,55 @@ pub enum Side {
     Left,
 }
 
+impl Side {
+    const fn is_horizontal(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+
+    /// Where a panel hugging this edge anchors.
+    const fn anchor(self) -> Align2 {
+        match self {
+            Self::Right => Align2::RIGHT_CENTER,
+            Self::Left => Align2::LEFT_CENTER,
+            Self::Top => Align2::CENTER_TOP,
+            Self::Bottom => Align2::CENTER_BOTTOM,
+        }
+    }
+
+    /// The translation that pushes a panel `dist` off-screen past this edge.
+    const fn outward(self, dist: f32) -> Vec2 {
+        match self {
+            Self::Right => Vec2::new(dist, 0.0),
+            Self::Left => Vec2::new(-dist, 0.0),
+            Self::Bottom => Vec2::new(0.0, dist),
+            Self::Top => Vec2::new(0.0, -dist),
+        }
+    }
+
+    /// Round only the inner edge, away from the hugged screen border.
+    const fn inner_corners(self, r: u8) -> egui::CornerRadius {
+        let [nw, ne, sw, se] = match self {
+            Self::Bottom => [r, r, 0, 0],
+            Self::Top => [0, 0, r, r],
+            Self::Left => [0, r, 0, r],
+            Self::Right => [r, 0, r, 0],
+        };
+        egui::CornerRadius { nw, ne, sw, se }
+    }
+
+    /// Slide in from off-screen at progress `t`. A horizontal panel travels
+    /// its own width (`cross`, frame margins included); a vertical one the
+    /// viewport's height.
+    fn slide(self, t: f32, cross: f32, viewport: egui::Rect) -> TSTransform {
+        let dist = if self.is_horizontal() {
+            cross
+        } else {
+            viewport.height()
+        };
+        TSTransform::from_translation(self.outward((1.0 - t) * dist))
+    }
+}
+
 /// How the shared [`modal_shell`] enters and anchors: a centered card that
 /// zooms in (`Dialog`/`AlertDialog`), or an edge-anchored panel that slides in
 /// (`Sheet`).
@@ -127,122 +176,70 @@ struct Geometry {
     content_width: f32,
 }
 
-/// Build the shared modal shadow (soft, large blur).
-const fn modal_shadow() -> egui::epaint::Shadow {
-    egui::epaint::Shadow {
-        offset: [0, 0],
-        blur: 48,
-        spread: 0,
-        color: egui::Color32::from_black_alpha(60),
-    }
-}
-
-/// Resolve the [`Geometry`] for a given [`ModalStyle`] at progress `t`.
-fn geometry(
-    style: ModalStyle,
-    t: f32,
-    width: f32,
-    viewport: egui::Rect,
-    tokens: Tokens,
-) -> Geometry {
-    // Opaque `widget` (floating-surface) fill — `background` is the
-    // app-canvas token and may be translucent under a user theme, which
-    // would make every modal see-through against the dimmed backdrop; `card`
-    // is reserved for static containers, not floating overlays.
-    let base = Frame::new()
-        .fill(tokens.widget)
-        .stroke(Stroke::new(1.0, tokens.border))
-        .inner_margin(Margin::same(24)) // p-6
-        .shadow(modal_shadow());
-    match style {
-        ModalStyle::Center => {
-            // `zoom-in-95`: scale 0.95 → 1.0, centered on the viewport.
-            let scale = 0.05_f32.mul_add(t, 0.95);
-            let center = viewport.center().to_vec2();
-            Geometry {
-                anchor: Align2::CENTER_CENTER,
-                transform: TSTransform::new(center * (1.0 - scale), scale),
-                frame: base.corner_radius(tokens.radius_4xl()),
-                // Clamp so the card (content + 2×24px margin) keeps a 16px gutter.
-                content_width: width.min((viewport.width() - 80.0).max(0.0)),
+impl Geometry {
+    /// Resolve `style`'s geometry at animation progress `t`.
+    fn new(style: ModalStyle, t: f32, width: f32, viewport: egui::Rect, tokens: Tokens) -> Self {
+        // Opaque `widget` (floating-surface) fill — `background` is the
+        // app-canvas token and may be translucent under a user theme, which
+        // would make every modal see-through against the dimmed backdrop;
+        // `card` is reserved for static containers, not floating overlays.
+        let base = Frame::new()
+            .fill(tokens.widget)
+            .stroke(Stroke::new(1.0, tokens.border))
+            .inner_margin(Margin::same(24)) // p-6
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 0],
+                blur: 48,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(60),
+            });
+        match style {
+            ModalStyle::Center => {
+                // `zoom-in-95`: scale 0.95 → 1.0, centered on the viewport.
+                let scale = 0.05_f32.mul_add(t, 0.95);
+                let center = viewport.center().to_vec2();
+                Self {
+                    anchor: Align2::CENTER_CENTER,
+                    transform: TSTransform::new(center * (1.0 - scale), scale),
+                    frame: base.corner_radius(tokens.radius_4xl()),
+                    // Clamp so the card (content + 2×24px margin) keeps a 16px gutter.
+                    content_width: width.min((viewport.width() - 80.0).max(0.0)),
+                }
             }
-        }
-        ModalStyle::Sheet(side) => {
-            let mx = f32::from(SHEET_MARGIN.left + SHEET_MARGIN.right);
-            let cw = width.min((viewport.width() - mx).max(0.0));
-            // The off-screen → rest translation along the entering axis.
-            let dist = match side {
-                Side::Left | Side::Right => cw + mx,
-                Side::Top | Side::Bottom => viewport.height(),
-            };
-            let slid = (1.0 - t) * dist;
-            let offset = match side {
-                Side::Right => Vec2::new(slid, 0.0),
-                Side::Left => Vec2::new(-slid, 0.0),
-                Side::Bottom => Vec2::new(0.0, slid),
-                Side::Top => Vec2::new(0.0, -slid),
-            };
-            let anchor = match side {
-                Side::Right => Align2::RIGHT_CENTER,
-                Side::Left => Align2::LEFT_CENTER,
-                Side::Top => Align2::CENTER_TOP,
-                Side::Bottom => Align2::CENTER_BOTTOM,
-            };
-            Geometry {
-                anchor,
-                transform: TSTransform::from_translation(offset),
-                // Edge-hugging panels sit on the opaque `widget` surface
-                // (shadcn's `bg-popover`); the darkest `background` wouldn't
-                // contrast against the dimmed page in dark mode.
-                frame: base.fill(tokens.widget).inner_margin(SHEET_MARGIN),
-                content_width: cw,
+            ModalStyle::Sheet(side) => {
+                let mx = f32::from(SHEET_MARGIN.left + SHEET_MARGIN.right);
+                let cw = width.min((viewport.width() - mx).max(0.0));
+                Self {
+                    anchor: side.anchor(),
+                    transform: side.slide(t, cw + mx, viewport),
+                    // Edge-hugging panels sit on the opaque `widget` surface
+                    // (shadcn's `bg-popover`); the darkest `background` wouldn't
+                    // contrast against the dimmed page in dark mode.
+                    frame: base.fill(tokens.widget).inner_margin(SHEET_MARGIN),
+                    content_width: cw,
+                }
             }
-        }
-        ModalStyle::Drawer(side) => {
-            // Edge-anchored like a sheet, but with the inner-edge corners
-            // rounded. The cross-axis (top/bottom: width; left/right: height)
-            // spans the full viewport minus the 2×24px frame margins so the
-            // content keeps its padding instead of overflowing the screen.
-            let r = tokens.radius_4xl();
-            let horizontal = matches!(side, Side::Left | Side::Right);
-            let cw = if horizontal {
-                width.min((viewport.width() - 48.0).max(0.0))
-            } else {
-                (viewport.width() - 48.0).max(0.0)
-            };
-            // Distance the panel travels from offscreen to rest (incl. margins).
-            let dist = match side {
-                Side::Left | Side::Right => cw + 48.0,
-                Side::Top | Side::Bottom => viewport.height(),
-            };
-            let slid = (1.0 - t) * dist;
-            let offset = match side {
-                Side::Right => Vec2::new(slid, 0.0),
-                Side::Left => Vec2::new(-slid, 0.0),
-                Side::Bottom => Vec2::new(0.0, slid),
-                Side::Top => Vec2::new(0.0, -slid),
-            };
-            let anchor = match side {
-                Side::Right => Align2::RIGHT_CENTER,
-                Side::Left => Align2::LEFT_CENTER,
-                Side::Top => Align2::CENTER_TOP,
-                Side::Bottom => Align2::CENTER_BOTTOM,
-            };
-            // Round only the inner edge, away from the hugged screen border.
-            let [nw, ne, sw, se] = match side {
-                Side::Bottom => [r, r, 0, 0],
-                Side::Top => [0, 0, r, r],
-                Side::Left => [0, r, 0, r],
-                Side::Right => [r, 0, r, 0],
-            };
-            let corners = egui::CornerRadius { nw, ne, sw, se };
-            Geometry {
-                anchor,
-                transform: TSTransform::from_translation(offset),
-                // Opaque `widget` surface, as for the sheet, so it contrasts
-                // against the dimmed page in dark mode.
-                frame: base.fill(tokens.widget).corner_radius(corners),
-                content_width: cw,
+            ModalStyle::Drawer(side) => {
+                // Edge-anchored like a sheet, but with the inner-edge corners
+                // rounded. The cross-axis (top/bottom: width; left/right: height)
+                // spans the full viewport minus the 2×24px frame margins so the
+                // content keeps its padding instead of overflowing the screen.
+                let full = (viewport.width() - 48.0).max(0.0);
+                let cw = if side.is_horizontal() {
+                    width.min(full)
+                } else {
+                    full
+                };
+                Self {
+                    anchor: side.anchor(),
+                    transform: side.slide(t, cw + 48.0, viewport),
+                    // Opaque `widget` surface, as for the sheet, so it contrasts
+                    // against the dimmed page in dark mode.
+                    frame: base
+                        .fill(tokens.widget)
+                        .corner_radius(side.inner_corners(tokens.radius_4xl())),
+                    content_width: cw,
+                }
             }
         }
     }
@@ -288,7 +285,7 @@ pub(crate) fn modal_shell<R>(
         transform,
         mut frame,
         content_width,
-    } = geometry(style, t, width, viewport, tokens);
+    } = Geometry::new(style, t, width, viewport, tokens);
     style_hook.apply(&mut frame);
 
     let mut inner = None;
@@ -404,7 +401,7 @@ impl Dialog {
         open: &mut bool,
         content: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
-        let id = egui::Id::new("glazier-dialog").with(&self.title);
+        let id = egui::Id::unique("glazier-dialog").with(&self.title);
         let style_hook = std::mem::take(&mut self.style_hook);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let width = self.width.unwrap_or(m.content_width);

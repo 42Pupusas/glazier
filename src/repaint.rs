@@ -68,7 +68,7 @@ impl Repaint {
     /// state for a background Wayland surface, so components must not infer
     /// this policy independently from that snapshot.
     pub fn set_animations_enabled(ctx: &Context, enabled: bool) {
-        ctx.data_mut(|data| data.insert_temp(egui::Id::new(ANIMATIONS_ENABLED_ID), enabled));
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique(ANIMATIONS_ENABLED_ID), enabled));
     }
 
     /// Whether clock-driven component animation may request another frame.
@@ -90,7 +90,7 @@ impl Repaint {
     #[must_use]
     pub fn animations_enabled(ctx: &Context) -> bool {
         if let Some(enabled) =
-            ctx.data(|data| data.get_temp::<bool>(egui::Id::new(ANIMATIONS_ENABLED_ID)))
+            ctx.data(|data| data.get_temp::<bool>(egui::Id::unique(ANIMATIONS_ENABLED_ID)))
         {
             return enabled;
         }
@@ -130,7 +130,7 @@ impl Repaint {
         Self::label(ctx, cause);
 
         let now = ctx.input(|i| i.time);
-        let id = egui::Id::new((CAUSES_ID, "last-frame", cause));
+        let id = egui::Id::unique((CAUSES_ID, "last-frame", cause));
         let last: Option<f64> = ctx.data(|data| data.get_temp(id));
 
         // Elapsed time since this cause last got a frame. A missing entry (or a
@@ -149,29 +149,16 @@ impl Repaint {
             remaining
         };
 
-        // Ask for the remaining time *plus* the frame time egui is about to
-        // subtract from it.
+        // The cause must speak on *every* pass: egui keeps only the minimum
+        // delay across requesters and resets it each pass, so a cause that
+        // stays silent has nothing scheduled and the animation freezes until
+        // unrelated input arrives. `remaining` is always positive here, so the
+        // request is a real deadline and never an immediate redraw.
         //
-        // This one line is the whole fix, and both bugs this had were two
-        // faces of it. `request_repaint_after` internally does
-        // `delay -= predicted_dt` ("make it less likely we over-shoot"), so:
-        //
-        //   - Asking for the bare remainder floors to ZERO once the remainder
-        //     drops under one frame, and zero means *redraw now*. That bought
-        //     one bonus immediate frame per interval — a 30fps cadence
-        //     measured as the 60fps spin that started this investigation.
-        //   - Staying silent instead (the obvious "fix") is worse: egui keeps
-        //     only the minimum delay across requesters and resets it every
-        //     pass, so a cause that says nothing has nothing scheduled at all.
-        //     The window then parks until unrelated input arrives and the
-        //     animation freezes solid — 3 frames per second, not 30.
-        //
-        // So the cause must speak on *every* pass, and must pre-compensate for
-        // the subtraction. Adding `predicted_dt` back makes the delay egui
-        // actually stores equal the time genuinely left in the interval, which
-        // both keeps a real deadline alive and stops it collapsing to zero.
-        let predicted = f64::from(ctx.input(|i| i.predicted_dt));
-        ctx.request_repaint_after(Duration::from_secs_f64(remaining + predicted));
+        // egui 0.37 stores the delay as given; earlier versions subtracted
+        // `predicted_dt`, which this used to add back. Keeping that
+        // compensation on 0.37 stretches every interval by one frame.
+        ctx.request_repaint_after(Duration::from_secs_f64(remaining));
     }
 
     /// How many times components have asked for a frame through [`Repaint`]
@@ -193,7 +180,7 @@ impl Repaint {
     #[must_use]
     pub fn request_count(ctx: &Context) -> u64 {
         ctx.data(|data| {
-            data.get_temp(egui::Id::new(REQUEST_COUNT_ID))
+            data.get_temp(egui::Id::unique(REQUEST_COUNT_ID))
                 .unwrap_or_default()
         })
     }
@@ -202,7 +189,9 @@ impl Repaint {
     /// previous call.
     #[must_use]
     pub fn take_causes(ctx: &Context) -> BTreeSet<&'static str> {
-        ctx.data_mut(|data| std::mem::take(data.get_temp_mut_or_default(egui::Id::new(CAUSES_ID))))
+        ctx.data_mut(|data| {
+            std::mem::take(data.get_temp_mut_or_default(egui::Id::unique(CAUSES_ID)))
+        })
     }
 
     /// Record a component label without scheduling a frame.
@@ -212,11 +201,11 @@ impl Repaint {
     fn label(ctx: &Context, cause: &'static str) {
         ctx.data_mut(|data| {
             let causes =
-                data.get_temp_mut_or_default::<BTreeSet<&'static str>>(egui::Id::new(CAUSES_ID));
+                data.get_temp_mut_or_default::<BTreeSet<&'static str>>(egui::Id::unique(CAUSES_ID));
             causes.insert(cause);
             // Both request paths funnel through here, so this is the single
             // place where the animation-attribution counter stays honest.
-            *data.get_temp_mut_or_default::<u64>(egui::Id::new(REQUEST_COUNT_ID)) += 1;
+            *data.get_temp_mut_or_default::<u64>(egui::Id::unique(REQUEST_COUNT_ID)) += 1;
         });
     }
 }
@@ -292,7 +281,7 @@ mod tests {
         // that wants 10fps.
         let passes = 60;
         let dt = 1.0 / f64::from(passes);
-        let id = egui::Id::new((CAUSES_ID, "last-frame", "capped"));
+        let id = egui::Id::unique((CAUSES_ID, "last-frame", "capped"));
 
         let mut painted = 0;
         for pass in 0..passes {

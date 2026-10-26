@@ -200,7 +200,7 @@ impl DataTable {
     pub fn show(mut self, ui: &mut Ui) -> Option<usize> {
         let tokens = Tokens::get(ui);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
-        let state_id = Id::new(("glazier-datatable", &self.id_salt));
+        let state_id = Id::unique(("glazier-datatable", &self.id_salt));
         let mut state: DtState = ui.data_mut(|d| d.get_temp(state_id).unwrap_or_default());
 
         let mut clicked = None;

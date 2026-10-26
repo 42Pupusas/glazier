@@ -31,7 +31,9 @@
 //! # });
 //! ```
 
-use egui::{Id, Rect, Response, Sense, Stroke, Ui, Vec2, Widget};
+use std::sync::Arc;
+
+use egui::{CursorIcon, Galley, Id, Rect, Response, Sense, Stroke, Ui, Vec2, Widget};
 
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
@@ -89,6 +91,18 @@ pub struct TabsResponse {
     /// A drag-reorder this frame as `(from, to)` display indices to swap (only
     /// when [`reorderable`](Tabs::reorderable)). Apply it to your own list.
     pub reordered: Option<(usize, usize)>,
+}
+
+impl TabsResponse {
+    /// A response that reports no intents.
+    const fn idle(response: Response) -> Self {
+        Self {
+            response,
+            clicked: None,
+            closed: None,
+            reordered: None,
+        }
+    }
 }
 
 /// A pill-style tab list bound to a caller-owned active index.
@@ -167,7 +181,7 @@ impl<'a> Tabs<'a> {
     /// Set a stable id seed, disambiguating the scroll area and per-trigger drag
     /// state when several tab rows live under one parent id.
     pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id_salt = Some(Id::new(salt));
+        self.id_salt = Some(Id::unique(salt));
         self
     }
 
@@ -183,30 +197,24 @@ impl<'a> Tabs<'a> {
     /// The bound active index is updated on click; `closed` / `reordered` are
     /// returned for the caller to apply to its own tab model.
     pub fn list_response(mut self, ui: &mut Ui) -> TabsResponse {
-        let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
-        // Pull the fields out so the closure can borrow them past `self`.
-        let Self {
-            active,
-            labels,
-            closable,
-            reorderable,
-            scrollable,
-            id_salt,
-            sizing_hook: _,
-        } = self;
-
-        if scrollable {
-            let salt = id_salt
-                .unwrap_or_else(|| Id::new("glazier-tabs"))
+        let options = StripOptions {
+            closable: self.closable,
+            reorderable: self.reorderable,
+            id_salt: self.id_salt,
+            m: crate::sizing::resolve(std::mem::take(&mut self.sizing_hook)),
+        };
+        let (active, labels) = (self.active, &self.labels);
+        if self.scrollable {
+            let salt = self
+                .id_salt
+                .unwrap_or_else(|| Id::unique("glazier-tabs"))
                 .with("scroll");
             egui::ScrollArea::horizontal()
                 .id_salt(salt)
-                .show(ui, |ui| {
-                    list_inner(ui, active, &labels, closable, reorderable, id_salt, m)
-                })
+                .show(ui, |ui| Strip::show(ui, options, active, labels))
                 .inner
         } else {
-            list_inner(ui, active, &labels, closable, reorderable, id_salt, m)
+            Strip::show(ui, options, active, labels)
         }
     }
 
@@ -226,132 +234,174 @@ impl<'a> Tabs<'a> {
     }
 }
 
-/// Paint the trigger row and run hit-testing. Factored out of [`Tabs`] so it can
-/// run either bare or inside a horizontal [`egui::ScrollArea`].
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-fn list_inner(
-    ui: &mut Ui,
-    active: &mut usize,
-    labels: &[String],
+impl Widget for Tabs<'_> {
+    /// Renders just the trigger row. Use [`Tabs::show`] for panels.
+    fn ui(self, ui: &mut Ui) -> Response {
+        self.list(ui)
+    }
+}
+
+/// The trigger row's settings, split from [`Tabs`] so the row can render
+/// either bare or inside a horizontal [`egui::ScrollArea`].
+#[derive(Clone, Copy)]
+struct StripOptions {
     closable: bool,
     reorderable: bool,
     id_salt: Option<Id>,
     m: TabsMetrics,
-) -> TabsResponse {
-    let tokens = Tokens::get(ui);
-    let n = labels.len();
-    if n == 0 {
-        let response = ui.allocate_response(Vec2::ZERO, Sense::hover());
-        return TabsResponse {
-            response,
-            clicked: None,
-            closed: None,
-            reordered: None,
+}
+
+/// One frame of the trigger row: its laid-out labels and where they sit.
+struct Strip {
+    opts: StripOptions,
+    tokens: Tokens,
+    galleys: Vec<Arc<Galley>>,
+    widths: Vec<f32>,
+    track: Rect,
+    response: Response,
+    base_id: Id,
+}
+
+impl Strip {
+    /// Lay out, paint, and hit-test the row, applying a click to `active`.
+    fn show(
+        ui: &mut Ui,
+        opts: StripOptions,
+        active: &mut usize,
+        labels: &[String],
+    ) -> TabsResponse {
+        let Some(last) = labels.len().checked_sub(1) else {
+            return TabsResponse::idle(ui.allocate_response(Vec2::ZERO, Sense::hover()));
         };
+        *active = (*active).min(last);
+        let strip = Self::new(ui, opts, labels);
+        strip.paint_track(ui, *active);
+        let mut out = TabsResponse::idle(strip.response.clone());
+        for i in 0..labels.len() {
+            strip.trigger(ui, i, *active, &mut out);
+        }
+        if let Some(i) = out.clicked {
+            *active = i;
+        }
+        out
     }
-    *active = (*active).min(n - 1);
 
-    // Lay labels out with PLACEHOLDER so the per-trigger text colour applies at
-    // paint time (see toggle_group.rs for the baked-colour trap).
-    let font = crate::fonts::semibold(ui, 13.0);
-    let galleys: Vec<_> = labels
-        .iter()
-        .map(|label| {
-            ui.painter()
-                .layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER)
-        })
-        .collect();
-    // A closable trigger reserves room for the gap + glyph after its label.
-    let close_extra = if closable {
-        m.close_gap + m.close_sz
-    } else {
-        0.0
-    };
-    let widths: Vec<f32> = galleys
-        .iter()
-        .map(|g| m.trigger_pad_x.mul_add(2.0, g.size().x) + close_extra)
-        .collect();
-    let track_w = m.track_pad.mul_add(2.0, widths.iter().sum());
-
-    let (rect, response) = ui.allocate_at_least(Vec2::new(track_w, m.track_h), Sense::hover());
-    // Pin geometry to the intrinsic width so the track hugs its triggers and
-    // stays left-aligned even when the layout hands us a wider rect.
-    let track = Rect::from_min_size(rect.left_top(), Vec2::new(track_w, m.track_h));
-
-    let base_id = id_salt.map_or(response.id, |s| response.id.with(s));
-
-    // Per-trigger left edge in display order.
-    let left_of = |i: usize| -> f32 { m.track_pad + widths.iter().take(i).sum::<f32>() };
-
-    // Active trigger's live drag offset (only meaningful while reordering).
-    let active_offset: f32 = if reorderable {
-        ui.ctx()
-            .data(|d| d.get_temp(base_id.with(("drag", *active))).unwrap_or(0.0))
-    } else {
-        0.0
-    };
-
-    // Animate the active chip so it slides between tabs; while the active tab
-    // is being dragged, follow the pointer via its offset.
-    //
-    // Animate the chip's offset *within the track*, not its absolute screen x.
-    // The absolute coordinate moves whenever the page scrolls (the whole strip
-    // translates), so animating it made the chip chase every scroll tick —
-    // re-arming `anim_time` of repaints per tick and visibly lagging the strip.
-    // The track-relative offset only changes when the *selection* changes,
-    // which is exactly the movement the slide animation is for; scroll
-    // translation lands via `track.left()` instantly, as it must.
-    let target_offset = left_of(*active) + active_offset;
-    let chip_x = track.left()
-        + if active_offset.abs() > 0.5 {
-            target_offset // don't animate while actively dragging — track the pointer
+    fn new(ui: &mut Ui, opts: StripOptions, labels: &[String]) -> Self {
+        let m = opts.m;
+        // Lay labels out with PLACEHOLDER so the per-trigger text colour applies at
+        // paint time (see toggle_group.rs for the baked-colour trap).
+        let font = crate::fonts::semibold(ui, 13.0);
+        let galleys: Vec<_> = labels
+            .iter()
+            .map(|label| {
+                ui.painter()
+                    .layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER)
+            })
+            .collect();
+        // A closable trigger reserves room for the gap + glyph after its label.
+        let close_extra = if opts.closable {
+            m.close_gap + m.close_sz
         } else {
-            ui.ctx()
-                .animate_value_with_time(response.id.with("chip_x"), target_offset, m.anim_time)
+            0.0
         };
-    let chip_w = widths[*active];
+        let widths: Vec<f32> = galleys
+            .iter()
+            .map(|g| m.trigger_pad_x.mul_add(2.0, g.size().x) + close_extra)
+            .collect();
+        let track_w = m.track_pad.mul_add(2.0, widths.iter().sum());
+        let (rect, response) = ui.allocate_at_least(Vec2::new(track_w, m.track_h), Sense::hover());
+        let base_id = opts.id_salt.map_or(response.id, |s| response.id.with(s));
+        Self {
+            opts,
+            tokens: Tokens::get(ui),
+            galleys,
+            widths,
+            // Pin geometry to the intrinsic width so the track hugs its triggers
+            // and stays left-aligned even when the layout hands us a wider rect.
+            track: Rect::from_min_size(rect.left_top(), Vec2::new(track_w, m.track_h)),
+            response,
+            base_id,
+        }
+    }
 
-    if ui.is_rect_visible(track) {
+    /// Trigger `i`'s left edge, relative to the track.
+    fn left_of(&self, i: usize) -> f32 {
+        self.opts.m.track_pad + self.widths[..i].iter().sum::<f32>()
+    }
+
+    fn drag_id(&self, i: usize) -> Id {
+        self.base_id.with(("drag", i))
+    }
+
+    /// How far trigger `i` is currently dragged from its slot.
+    fn drag_offset(&self, ui: &Ui, i: usize) -> f32 {
+        if !self.opts.reorderable {
+            return 0.0;
+        }
+        ui.ctx()
+            .data(|d| d.get_temp(self.drag_id(i)).unwrap_or(0.0))
+    }
+
+    /// The active chip's screen x.
+    ///
+    /// The animation runs on the offset within the track, not on screen x:
+    /// screen x moves on every scroll tick, and animating it made the chip lag
+    /// the strip. While the active tab is dragged the chip follows the pointer
+    /// directly.
+    fn chip_x(&self, ui: &Ui, active: usize) -> f32 {
+        let dragged = self.drag_offset(ui, active);
+        let target = self.left_of(active) + dragged;
+        let offset = if dragged.abs() > 0.5 {
+            target
+        } else {
+            ui.ctx().animate_value_with_time(
+                self.response.id.with("chip_x"),
+                target,
+                self.opts.m.anim_time,
+            )
+        };
+        self.track.left() + offset
+    }
+
+    /// Paint the muted track and the active chip floating on it.
+    fn paint_track(&self, ui: &Ui, active: usize) {
+        let chip_x = self.chip_x(ui, active);
+        if !ui.is_rect_visible(self.track) {
+            return;
+        }
+        let (m, tokens) = (self.opts.m, self.tokens);
         let painter = ui.painter();
-        // Muted track.
-        painter.rect_filled(track, tokens.radius_lg(), tokens.muted);
-
-        // Active chip (animated x), inset within the track padding.
+        painter.rect_filled(self.track, tokens.radius_lg(), tokens.muted);
         let chip = Rect::from_min_size(
-            egui::pos2(chip_x, track.top() + m.track_pad),
-            Vec2::new(chip_w, m.inner_h()),
+            egui::pos2(chip_x, self.track.top() + m.track_pad),
+            Vec2::new(self.widths[active], m.inner_h()),
         );
+        // One step tighter than the track so the chip nests inside it.
+        let radius = tokens.radius_lg().saturating_sub(2);
         // Soft shadow + opaque `widget` fill so the active trigger floats
         // above the (possibly translucent) app `background`.
         painter.rect_filled(
             chip.translate(Vec2::new(0.0, 1.0)),
-            inner_radius(tokens),
+            radius,
             tokens.border.gamma_multiply(0.5),
         );
-        painter.rect_filled(chip, inner_radius(tokens), tokens.widget);
+        painter.rect_filled(chip, radius, tokens.widget);
     }
 
-    let mut clicked: Option<usize> = None;
-    let mut closed: Option<usize> = None;
-    let mut reordered: Option<(usize, usize)> = None;
+    /// Trigger `i`'s rect, shifted by any live drag.
+    fn segment(&self, ui: &Ui, i: usize) -> Rect {
+        let m = self.opts.m;
+        let x = self.track.left() + self.left_of(i) + self.drag_offset(ui, i);
+        Rect::from_min_size(
+            egui::pos2(x, self.track.top() + m.track_pad),
+            Vec2::new(self.widths[i], m.inner_h()),
+        )
+    }
 
-    // Hit-test + label each trigger.
-    for (i, w) in widths.iter().enumerate() {
-        // While a tab is dragged, paint it shifted by its stored offset.
-        let drag_offset: f32 = if reorderable {
-            ui.ctx()
-                .data(|d| d.get_temp(base_id.with(("drag", i))).unwrap_or(0.0))
-        } else {
-            0.0
-        };
-        let seg_x = track.left() + left_of(i) + drag_offset;
-        let seg = Rect::from_min_size(
-            egui::pos2(seg_x, track.top() + m.track_pad),
-            Vec2::new(*w, m.inner_h()),
-        );
-
-        // Trailing close box, carved from the right of the trigger.
-        let close_rect = if closable {
+    /// The trailing close box carved from the right of `seg`, when closable.
+    fn close_rect(&self, seg: Rect) -> Option<Rect> {
+        let m = self.opts.m;
+        self.opts.closable.then(|| {
             Rect::from_center_size(
                 egui::pos2(
                     seg.right() - m.trigger_pad_x - m.close_sz / 2.0,
@@ -359,134 +409,240 @@ fn list_inner(
                 ),
                 Vec2::splat(m.close_sz),
             )
+        })
+    }
+
+    /// Hit-test, drag, close, and label trigger `i`, recording intents in `out`.
+    fn trigger(&self, ui: &Ui, i: usize, active: usize, out: &mut TabsResponse) {
+        let seg = self.segment(ui, i);
+        let close = self.close_rect(seg);
+        // The close box is excluded so a close click never selects or drags.
+        let hit = close.map_or(seg, |c| {
+            Rect::from_min_max(seg.min, egui::pos2(c.left(), seg.bottom()))
+        });
+        let (sense, cursor) = if self.opts.reorderable {
+            (Sense::click_and_drag(), CursorIcon::Grab)
         } else {
-            Rect::NOTHING
+            (Sense::click(), CursorIcon::PointingHand)
         };
-
-        // The selectable / draggable region excludes the close box so a close
-        // click never starts a drag or a select.
-        let hit_rect = if closable {
-            Rect::from_min_max(seg.min, egui::pos2(close_rect.left(), seg.bottom()))
-        } else {
-            seg
-        };
-
-        let sense = if reorderable {
-            Sense::click_and_drag()
-        } else {
-            Sense::click()
-        };
-        let seg_resp = ui
-            .interact(hit_rect, base_id.with(("seg", i)), sense)
-            .on_hover_cursor(if reorderable {
-                egui::CursorIcon::Grab
-            } else {
-                egui::CursorIcon::PointingHand
-            });
-        if seg_resp.clicked() {
-            clicked = Some(i);
+        let resp = ui
+            .interact(hit, self.base_id.with(("seg", i)), sense)
+            .on_hover_cursor(cursor);
+        if resp.clicked() {
+            out.clicked = Some(i);
         }
-
-        // Drag-to-reorder: accumulate an x offset, swap with a neighbour once
-        // dragged past half its width, and report the swap.
-        if reorderable {
-            let off_id = base_id.with(("drag", i));
-            let mut offset: f32 = ui.ctx().data(|d| d.get_temp(off_id).unwrap_or(0.0));
-            if seg_resp.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                offset += seg_resp.drag_delta().x;
-                if i + 1 < n && offset > widths[i + 1] / 2.0 {
-                    reordered = Some((i, i + 1));
-                    offset -= widths[i + 1];
-                } else if i > 0 && offset < -widths[i - 1] / 2.0 {
-                    reordered = Some((i, i - 1));
-                    offset += widths[i - 1];
-                }
-            } else if seg_resp.drag_stopped() || !seg_resp.is_pointer_button_down_on() {
-                offset = 0.0;
-            }
-            ui.ctx().data_mut(|d| d.insert_temp(off_id, offset));
+        if self.opts.reorderable {
+            out.reordered = self.drag(ui, i, &resp).or(out.reordered);
         }
-
-        // Close button.
-        if closable && close_rect.is_positive() {
-            let close_resp = ui.interact(close_rect, base_id.with(("close", i)), Sense::click());
-            if close_resp.clicked() {
-                closed = Some(i);
-            }
-            if ui.is_rect_visible(close_rect) {
-                if close_resp.hovered() {
-                    ui.painter().rect_filled(
-                        close_rect,
-                        tokens.radius_md().saturating_sub(2),
-                        tokens.muted_foreground.gamma_multiply(0.25),
-                    );
-                }
-                let c = close_rect.center();
-                let h = m.close_sz * 0.22;
-                let stroke = Stroke::new(1.4, tokens.muted_foreground);
-                ui.painter().line_segment(
-                    [egui::pos2(c.x - h, c.y - h), egui::pos2(c.x + h, c.y + h)],
-                    stroke,
-                );
-                ui.painter().line_segment(
-                    [egui::pos2(c.x + h, c.y - h), egui::pos2(c.x - h, c.y + h)],
-                    stroke,
-                );
-            }
+        if close.is_some_and(|c| self.close_button(ui, i, c)) {
+            out.closed = Some(i);
         }
-
         if ui.is_rect_visible(seg) {
-            let is_active = i == *active;
-            // Inactive triggers lift slightly toward foreground on hover.
-            let hover_t = ui.ctx().animate_bool_with_time(
-                response.id.with(("hover", i)),
-                seg_resp.hovered() && !is_active,
-                m.anim_time,
+            self.paint_label(
+                ui,
+                i,
+                seg,
+                close,
+                resp.hovered() && i != active,
+                i == active,
             );
-            let text_col = if is_active {
-                tokens.foreground
-            } else {
-                tokens
-                    .muted_foreground
-                    .lerp_to_gamma(tokens.foreground, hover_t)
-            };
-            let g = &galleys[i];
-            // Centre the label in the space left of the close box.
-            let label_cx = if closable {
-                f32::midpoint(seg.left() + m.trigger_pad_x, close_rect.left())
-            } else {
-                seg.center().x
-            };
-            let pos = egui::pos2(
-                label_cx - g.size().x / 2.0,
-                seg.center().y - g.size().y / 2.0,
-            );
-            ui.painter().galley(pos, g.clone(), text_col);
         }
     }
 
-    if let Some(i) = clicked {
-        *active = i;
+    /// Accumulate trigger `i`'s drag offset. Once it passes half a
+    /// neighbour's width, report the swap and rebase the offset onto the new
+    /// slot.
+    fn drag(&self, ui: &Ui, i: usize, resp: &Response) -> Option<(usize, usize)> {
+        let mut offset = self.drag_offset(ui, i);
+        let mut swap = None;
+        if resp.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+            offset += resp.drag_delta().x;
+            if let Some((to, shift)) = self.swap_target(i, offset) {
+                swap = Some((i, to));
+                offset -= shift;
+            }
+        } else if resp.drag_stopped() || !resp.is_pointer_button_down_on() {
+            offset = 0.0;
+        }
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(self.drag_id(i), offset));
+        swap
     }
 
-    TabsResponse {
-        response,
-        clicked,
-        closed,
-        reordered,
+    /// The neighbour trigger `i` has been dragged past, with the signed width
+    /// it moved by.
+    fn swap_target(&self, i: usize, offset: f32) -> Option<(usize, f32)> {
+        let right = self
+            .widths
+            .get(i + 1)
+            .filter(|w| offset > *w / 2.0)
+            .map(|w| (i + 1, *w));
+        right.or_else(|| {
+            let left = i.checked_sub(1)?;
+            let w = self.widths[left];
+            (offset < -w / 2.0).then_some((left, -w))
+        })
+    }
+
+    /// The `✕` box for trigger `i`. Returns `true` when clicked.
+    fn close_button(&self, ui: &Ui, i: usize, rect: Rect) -> bool {
+        let resp = ui.interact(rect, self.base_id.with(("close", i)), Sense::click());
+        if ui.is_rect_visible(rect) {
+            let tokens = self.tokens;
+            if resp.hovered() {
+                ui.painter().rect_filled(
+                    rect,
+                    tokens.radius_md().saturating_sub(2),
+                    tokens.muted_foreground.gamma_multiply(0.25),
+                );
+            }
+            let c = rect.center();
+            let h = self.opts.m.close_sz * 0.22;
+            let stroke = Stroke::new(1.4, tokens.muted_foreground);
+            for dy in [-h, h] {
+                ui.painter().line_segment(
+                    [egui::pos2(c.x - h, c.y + dy), egui::pos2(c.x + h, c.y - dy)],
+                    stroke,
+                );
+            }
+        }
+        resp.clicked()
+    }
+
+    /// Paint trigger `i`'s label, centred in the space left of its close box.
+    fn paint_label(
+        &self,
+        ui: &Ui,
+        i: usize,
+        seg: Rect,
+        close: Option<Rect>,
+        hovered: bool,
+        is_active: bool,
+    ) {
+        let tokens = self.tokens;
+        // Inactive triggers lift slightly toward foreground on hover.
+        let hover_t = ui.ctx().animate_bool_with_time(
+            self.response.id.with(("hover", i)),
+            hovered,
+            self.opts.m.anim_time,
+        );
+        let color = if is_active {
+            tokens.foreground
+        } else {
+            tokens
+                .muted_foreground
+                .lerp_to_gamma(tokens.foreground, hover_t)
+        };
+        let label_cx = close.map_or_else(
+            || seg.center().x,
+            |c| f32::midpoint(seg.left() + self.opts.m.trigger_pad_x, c.left()),
+        );
+        let g = &self.galleys[i];
+        let pos = egui::pos2(
+            label_cx - g.size().x / 2.0,
+            seg.center().y - g.size().y / 2.0,
+        );
+        ui.painter().galley(pos, g.clone(), color);
     }
 }
 
-/// Active-chip corner radius: one step tighter than the track so the chip nests
-/// neatly inside the rounded track.
-const fn inner_radius(tokens: Tokens) -> u8 {
-    tokens.radius_lg().saturating_sub(2)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+    use egui::FullOutput;
 
-impl Widget for Tabs<'_> {
-    /// Renders just the trigger row. Use [`Tabs::show`] for panels.
-    fn ui(self, ui: &mut Ui) -> Response {
-        self.list(ui)
+    const LABELS: [&str; 3] = ["Account", "Password", "Billing"];
+
+    /// An editor-style tab row on a headless context, collecting intents.
+    #[derive(Default)]
+    struct Rig {
+        ui: TestUi,
+        active: usize,
+        closed: Option<usize>,
+        reordered: Option<(usize, usize)>,
+    }
+
+    impl Rig {
+        fn build(&mut self) -> impl FnMut(&mut Ui) + '_ {
+            |ui| {
+                let out = Tabs::new(&mut self.active, LABELS)
+                    .closable(true)
+                    .reorderable(true)
+                    .list_response(ui);
+                self.closed = out.closed.or(self.closed);
+                self.reordered = out.reordered.or(self.reordered);
+            }
+        }
+
+        fn run(
+            &mut self,
+            drive: impl FnOnce(&TestUi, &mut dyn FnMut(&mut Ui)) -> FullOutput,
+        ) -> FullOutput {
+            let ui = std::mem::take(&mut self.ui);
+            let out = drive(&ui, &mut self.build());
+            self.ui = ui;
+            out
+        }
+
+        fn label(&mut self, text: &str) -> Rect {
+            let out = self.run(|ui, build| ui.frame(build));
+            TestUi::text_rect(&out, text)
+        }
+    }
+
+    #[test]
+    fn clicking_a_trigger_selects_it() {
+        let mut rig = Rig::default();
+        let password = rig.label("Password").center();
+        rig.run(|ui, build| ui.click(password, build));
+        assert_eq!(rig.active, 1);
+        assert_eq!(rig.closed, None);
+    }
+
+    #[test]
+    fn clicking_the_cross_reports_a_close() {
+        let mut rig = Rig::default();
+        let billing = rig.label("Billing");
+        let cross = egui::pos2(billing.right() + 10.0, billing.center().y);
+        rig.run(|ui, build| ui.click(cross, build));
+        assert_eq!(rig.closed, Some(2));
+        assert_eq!(rig.active, 0);
+    }
+
+    #[test]
+    fn dragging_past_a_neighbour_reports_a_swap() {
+        let mut rig = Rig::default();
+        let account = rig.label("Account").center();
+        let password = rig.label("Password").center();
+        rig.run(|ui, build| ui.drag(account, password, build));
+        assert_eq!(rig.reordered, Some((0, 1)));
+    }
+
+    #[test]
+    fn active_index_is_clamped_to_the_labels() {
+        let ui = TestUi::new();
+        let mut active = 9;
+        ui.frame(|ui| {
+            Tabs::new(&mut active, LABELS)
+                .scrollable(true)
+                .show(ui, |_, _| ());
+        });
+        assert_eq!(active, 2);
+    }
+
+    #[test]
+    fn empty_tabs_take_no_space() {
+        let ui = TestUi::new();
+        let mut active = 0;
+        let mut size = Vec2::splat(1.0);
+        ui.frame(|ui| {
+            size = ui
+                .add(Tabs::new(&mut active, Vec::<String>::new()))
+                .rect
+                .size();
+        });
+        assert_eq!(size, Vec2::ZERO);
     }
 }

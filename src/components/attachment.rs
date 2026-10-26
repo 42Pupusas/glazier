@@ -33,7 +33,9 @@
 //! # });
 //! ```
 
-use egui::{Color32, Image, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
+use std::sync::Arc;
+
+use egui::{Color32, Galley, Image, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::components::icon::Icon;
 use crate::sizing::{Sizeable, SizingHook};
@@ -72,7 +74,7 @@ impl Kind {
     /// Guess a kind from a file name's extension, defaulting to [`Kind::File`].
     #[must_use]
     pub fn from_name(name: &str) -> Self {
-        match extension(name).as_deref() {
+        match FileName(name).extension().as_deref() {
             Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "ico" | "avif") => {
                 Self::Image
             }
@@ -319,8 +321,10 @@ impl Attachment {
         if let Some(d) = &self.description {
             return Some(d.clone());
         }
-        let ty = extension(&self.name).map(|e| e.to_ascii_uppercase());
-        let sz = self.size_bytes.map(human_size);
+        let ty = FileName(&self.name)
+            .extension()
+            .map(|e| e.to_ascii_uppercase());
+        let sz = self.size_bytes.map(|b| Bytes(b).human());
         match (ty, sz) {
             (Some(t), Some(s)) => Some(format!("{t} · {s}")),
             (Some(t), None) => Some(t),
@@ -331,119 +335,89 @@ impl Attachment {
 
     /// Render the chip, returning its [`AttachmentResponse`].
     pub fn show(mut self, ui: &mut Ui) -> AttachmentResponse {
-        let tokens = Tokens::get(ui);
-        let m = Metrics::of(self.size);
-        let desc = self.resolved_description();
         let gap = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook)).gap;
-        let vertical = self.orientation == Orientation::Vertical;
-
-        let width = self.width.unwrap_or(if vertical { 132.0 } else { 240.0 });
-        let height = if vertical {
-            // padded tile + gap + name + desc.
-            let lines = m.name + if desc.is_some() { 2.0 + m.desc } else { 0.0 };
-            2.0f32.mul_add(m.pad, m.tile + gap + lines)
-        } else {
-            2.0f32.mul_add(m.pad, m.tile)
+        let desc = self.resolved_description();
+        let lay = ChipLayout {
+            m: Metrics::of(self.size),
+            gap,
+            vertical: self.orientation == Orientation::Vertical,
+            has_desc: desc.is_some(),
         };
-
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-        let mut removed = false;
-
-        if ui.is_rect_visible(rect) {
-            // Card chrome — destructive border while in the error state.
-            let border = if self.state == State::Error {
-                tokens.destructive
-            } else {
-                tokens.border
+        let (rect, response) = ui.allocate_exact_size(lay.size(self.width), Sense::click());
+        // Off-screen chips paint nothing and, crucially, request no frames:
+        // an invisible busy chip that keeps its shimmer cadence armed stops
+        // the window from ever idling.
+        if !ui.is_rect_visible(rect) {
+            return AttachmentResponse {
+                response,
+                removed: false,
             };
-            ui.painter().rect(
-                rect,
-                tokens.radius_md(),
-                tokens.card,
-                Stroke::new(1.0, border),
-                StrokeKind::Inside,
-            );
-
-            // --- Media tile -------------------------------------------------
-            let tile = if vertical {
-                egui::Rect::from_min_size(
-                    egui::pos2(rect.center().x - m.tile / 2.0, rect.top() + m.pad),
-                    Vec2::splat(m.tile),
-                )
-            } else {
-                egui::Rect::from_min_size(
-                    egui::pos2(rect.left() + m.pad, rect.center().y - m.tile / 2.0),
-                    Vec2::splat(m.tile),
-                )
-            };
-            self.paint_media(ui, tokens, tile, m.glyph);
-
-            // --- Remove action ---------------------------------------------
-            let mut content_right = rect.right() - m.pad;
-            if self.removable {
-                let btn = egui::Rect::from_min_size(
-                    egui::pos2(rect.right() - m.pad - m.close, rect.top() + m.pad),
-                    Vec2::splat(m.close),
-                );
-                let r = ui.interact(btn, response.id.with("rm"), Sense::click());
-                removed = r.clicked();
-                let hover_t = ui.ctx().animate_bool_with_time(r.id, r.hovered(), 0.12);
-                if hover_t > 0.0 {
-                    ui.painter().rect_filled(
-                        btn,
-                        tokens.radius_md(),
-                        tokens.accent.gamma_multiply(hover_t),
-                    );
-                }
-                let tint = tokens
-                    .muted_foreground
-                    .lerp_to_gamma(tokens.foreground, hover_t);
-                Icon::new(X).color(tint).image(tokens).paint_at(
-                    ui,
-                    egui::Rect::from_center_size(btn.center(), Vec2::splat(m.close * 0.6)),
-                );
-                if r.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                if !vertical {
-                    content_right -= m.close + gap;
-                }
-            }
-
-            // --- Content (name + description) -------------------------------
-            let (text_left, name_center_y) = if vertical {
-                (rect.left() + m.pad, tile.bottom() + gap + m.name / 2.0)
-            } else {
-                (tile.right() + gap, rect.center().y)
-            };
-            let avail = (content_right - text_left).max(0.0);
-            self.paint_content(
-                ui,
-                tokens,
-                &m,
-                text_left,
-                name_center_y,
-                avail,
-                desc.as_deref(),
-            );
         }
 
-        // A busy chip needs frames to advance its in-place colour pulse. Only
-        // request them while it is visible: an off-screen attachment cannot
-        // contribute pixels, so retaining a timer for it would waste redraws.
-        // Via `Repaint` so the request enforces its cadence as a real
-        // interval (a bare `request_repaint_after` is only a deadline) and is
-        // visible to a paint-caching host, which must not replay an
-        // animating chip.
-        if ui.is_rect_visible(rect) && self.state.is_busy() {
+        let tokens = Tokens::get(ui);
+        self.paint_chrome(ui, tokens, rect);
+        let tile = lay.tile(rect);
+        self.paint_media(ui, tokens, tile, lay.m.glyph);
+        let removed = self.removable && Self::remove_button(ui, tokens, lay.close(rect), &response);
+        let (left, name_cy, avail) = lay.text(rect, tile, self.removable);
+        self.paint_content(
+            ui,
+            tokens,
+            &lay.m,
+            egui::pos2(left, name_cy),
+            avail,
+            desc.as_deref(),
+        );
+
+        // Via `Repaint` so the cadence is a real interval (a bare
+        // `request_repaint_after` is only a deadline) and is visible to a
+        // paint-caching host, which must not replay an animating chip.
+        if self.state.is_busy() {
             crate::repaint::Repaint::request_after(
                 ui.ctx(),
                 "attachment.busy",
                 crate::repaint::Repaint::GRADIENT,
             );
         }
-
         AttachmentResponse { response, removed }
+    }
+
+    /// Card chrome; a destructive border while in the error state.
+    fn paint_chrome(&self, ui: &Ui, tokens: Tokens, rect: Rect) {
+        let border = if self.state == State::Error {
+            tokens.destructive
+        } else {
+            tokens.border
+        };
+        ui.painter().rect(
+            rect,
+            tokens.radius_md(),
+            tokens.card,
+            Stroke::new(1.0, border),
+            StrokeKind::Inside,
+        );
+    }
+
+    /// The × button. Returns `true` when clicked.
+    fn remove_button(ui: &Ui, tokens: Tokens, btn: Rect, chip: &Response) -> bool {
+        let r = ui.interact(btn, chip.id.with("rm"), Sense::click());
+        let hover_t = ui.ctx().animate_bool_with_time(r.id, r.hovered(), 0.12);
+        if hover_t > 0.0 {
+            ui.painter().rect_filled(
+                btn,
+                tokens.radius_md(),
+                tokens.accent.gamma_multiply(hover_t),
+            );
+        }
+        let tint = tokens
+            .muted_foreground
+            .lerp_to_gamma(tokens.foreground, hover_t);
+        let glyph = Rect::from_center_size(btn.center(), btn.size() * 0.6);
+        Icon::new(X).color(tint).image(tokens).paint_at(ui, glyph);
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        r.clicked()
     }
 
     /// Paint the media tile: a rounded image preview or a kind glyph on a muted
@@ -461,7 +435,9 @@ impl Attachment {
         let kind = self.kind.unwrap_or_else(|| Kind::from_name(&self.name));
         // Error swaps the glyph + tint for a destructive alert.
         let (svg, tint, fill) = if self.state == State::Error {
-            (ALERT, tokens.destructive, destructive_wash(tokens))
+            // A faint destructive wash behind the alert glyph.
+            let wash = tokens.muted.lerp_to_gamma(tokens.destructive, 0.18);
+            (ALERT, tokens.destructive, wash)
         } else {
             (kind.glyph(), tokens.muted_foreground, tokens.muted)
         };
@@ -472,47 +448,32 @@ impl Attachment {
         );
     }
 
-    /// Paint the name (with shimmer while busy) and the description line.
-    #[allow(clippy::too_many_arguments)]
+    /// Paint the name (shimmering while busy) with the description beneath,
+    /// the pair centred vertically on `name_anchor`.
     fn paint_content(
         &self,
         ui: &Ui,
         tokens: Tokens,
         m: &Metrics,
-        left: f32,
-        name_center_y: f32,
+        name_anchor: egui::Pos2,
         avail: f32,
         desc: Option<&str>,
     ) {
-        let name_font = egui::FontId::proportional(m.name);
-        let desc_font = egui::FontId::proportional(m.desc);
-
-        // The name shimmers between muted and foreground while uploading.
         let name_color = if self.state.is_busy() {
-            let t = ui.input(|i| i.time);
-            #[allow(clippy::cast_possible_truncation)]
-            let pulse = 0.5f32.mul_add((t as f32 * 3.0).sin(), 0.5);
+            // 0..1, three radians a second.
+            let pulse = ui.input(|i| (i.time * 3.0).sin().mul_add(0.5, 0.5));
             tokens
                 .muted_foreground
-                .lerp_to_gamma(tokens.foreground, pulse)
+                .lerp_to_gamma(tokens.foreground, Self::unit(pulse))
         } else {
             tokens.foreground
         };
-
-        let name = truncate_to_width(ui, &self.name, &name_font, avail);
-        let g = ui.painter().layout_no_wrap(name, name_font, name_color);
-        let name_h = g.size().y;
-
-        // Centre the name line on `name_center_y`, lifting it to make room for
-        // the description so name + desc straddle that anchor.
-        let block_h = if desc.is_some() {
-            name_h + 2.0 + m.desc
-        } else {
-            name_h
-        };
-        let name_top = name_center_y - block_h / 2.0;
+        let name = Fit { ui, max: avail }.line(&self.name, m.name, name_color);
+        let name_h = name.size().y;
+        let block_h = desc.map_or(name_h, |_| name_h + 2.0 + m.desc);
+        let top = name_anchor.y - block_h / 2.0;
         ui.painter()
-            .galley(egui::pos2(left, name_top), g, name_color);
+            .galley(egui::pos2(name_anchor.x, top), name, name_color);
 
         if let Some(d) = desc {
             let color = if self.state == State::Error {
@@ -520,73 +481,153 @@ impl Attachment {
             } else {
                 tokens.muted_foreground
             };
-            let dg = truncate_to_width(ui, d, &desc_font, avail);
-            let g = ui.painter().layout_no_wrap(dg, desc_font, color);
+            let g = Fit { ui, max: avail }.line(d, m.desc, color);
             ui.painter()
-                .galley(egui::pos2(left, name_top + name_h + 2.0), g, color);
+                .galley(egui::pos2(name_anchor.x, top + name_h + 2.0), g, color);
         }
     }
-}
 
-/// The lowercase extension of `name`, if any.
-fn extension(name: &str) -> Option<String> {
-    name.rsplit_once('.')
-        .map(|(_, e)| e.to_ascii_lowercase())
-        .filter(|e| !e.is_empty() && e.len() <= 5)
-}
-
-/// A faint destructive tint for the error media tile.
-fn destructive_wash(tokens: Tokens) -> Color32 {
-    tokens.muted.lerp_to_gamma(tokens.destructive, 0.18)
-}
-
-/// Format a byte count as a short human string (`284 KB`, `1.4 MB`).
-fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let mut size = bytes as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if size >= 100.0 {
-        format!("{size:.0} {}", UNITS[unit])
-    } else {
-        format!("{size:.1} {}", UNITS[unit])
+    /// A 0..1 animation value from `f64` time maths, as a lerp factor.
+    #[allow(clippy::cast_possible_truncation)]
+    const fn unit(v: f64) -> f32 {
+        v as f32
     }
 }
 
-/// Trim `text` with a trailing `…` so it fits within `max` points.
-fn truncate_to_width(ui: &Ui, text: &str, font: &egui::FontId, max: f32) -> String {
-    let measure = |s: &str| {
-        ui.painter()
-            .layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE)
-            .size()
-            .x
-    };
-    if measure(text) <= max {
-        return text.to_owned();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let mut lo = 0;
-    let mut hi = chars.len();
-    while lo < hi {
-        let mid = (lo + hi).div_ceil(2);
-        let candidate: String = chars[..mid].iter().collect::<String>() + "…";
-        if measure(&candidate) <= max {
-            lo = mid;
+/// Where the chip's parts sit, for one size and orientation.
+struct ChipLayout {
+    m: Metrics,
+    gap: f32,
+    vertical: bool,
+    has_desc: bool,
+}
+
+impl ChipLayout {
+    /// The chip's size: `width` or the orientation's default, around a
+    /// padded tile (with the text stacked beneath it when vertical).
+    fn size(&self, width: Option<f32>) -> Vec2 {
+        let m = self.m;
+        let (default_w, below) = if self.vertical {
+            let desc = if self.has_desc { 2.0 + m.desc } else { 0.0 };
+            (132.0, self.gap + m.name + desc)
         } else {
-            hi = mid - 1;
+            (240.0, 0.0)
+        };
+        Vec2::new(
+            width.unwrap_or(default_w),
+            m.pad.mul_add(2.0, m.tile + below),
+        )
+    }
+
+    /// The media tile: centred at the top when vertical, else at the left.
+    fn tile(&self, rect: Rect) -> Rect {
+        let m = self.m;
+        let min = if self.vertical {
+            egui::pos2(rect.center().x - m.tile / 2.0, rect.top() + m.pad)
+        } else {
+            egui::pos2(rect.left() + m.pad, rect.center().y - m.tile / 2.0)
+        };
+        Rect::from_min_size(min, Vec2::splat(m.tile))
+    }
+
+    /// The remove button, in the padded top-right corner.
+    fn close(&self, rect: Rect) -> Rect {
+        let m = self.m;
+        let min = egui::pos2(rect.right() - m.pad - m.close, rect.top() + m.pad);
+        Rect::from_min_size(min, Vec2::splat(m.close))
+    }
+
+    /// `(left, name centre y, width)` for the text block. Beside the tile
+    /// it stops short of the remove button; beneath it the button is above.
+    fn text(&self, rect: Rect, tile: Rect, removable: bool) -> (f32, f32, f32) {
+        let (m, gap) = (self.m, self.gap);
+        let (left, name_cy) = if self.vertical {
+            (rect.left() + m.pad, tile.bottom() + gap + m.name / 2.0)
+        } else {
+            (tile.right() + gap, rect.center().y)
+        };
+        let reserve = if removable && !self.vertical {
+            m.close + gap
+        } else {
+            0.0
+        };
+        let right = rect.right() - m.pad - reserve;
+        (left, name_cy, (right - left).max(0.0))
+    }
+}
+
+/// A file name.
+struct FileName<'a>(&'a str);
+
+impl FileName<'_> {
+    /// The lowercase extension, if any.
+    fn extension(&self) -> Option<String> {
+        self.0
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .filter(|e| !e.is_empty() && e.len() <= 5)
+    }
+}
+
+/// A byte count.
+struct Bytes(u64);
+
+impl Bytes {
+    /// A short human string (`284 KB`, `1.4 MB`).
+    fn human(&self) -> String {
+        const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+        if self.0 < 1024 {
+            return format!("{} B", self.0);
+        }
+        let mut size = self.float() / 1024.0;
+        let mut unit = 1;
+        while size >= 1024.0 && unit < UNITS.len() - 1 {
+            size /= 1024.0;
+            unit += 1;
+        }
+        if size >= 100.0 {
+            format!("{size:.0} {}", UNITS[unit])
+        } else {
+            format!("{size:.1} {}", UNITS[unit])
         }
     }
-    if lo == 0 {
-        "…".to_owned()
-    } else {
-        chars[..lo].iter().collect::<String>() + "…"
+
+    /// The count as a float; above 2⁵³ it rounds, far below display precision.
+    #[allow(clippy::cast_precision_loss)]
+    const fn float(&self) -> f64 {
+        self.0 as f64
+    }
+}
+
+/// Lays text out on one line no wider than `max`.
+struct Fit<'a> {
+    ui: &'a Ui,
+    max: f32,
+}
+
+impl Fit<'_> {
+    /// `text` at `size` and `color`, trimmed with a trailing `…` to fit.
+    fn line(&self, text: &str, size: f32, color: Color32) -> Arc<Galley> {
+        let font = egui::FontId::proportional(size);
+        let layout = |s: String| self.ui.painter().layout_no_wrap(s, font.clone(), color);
+        let full = layout(text.to_owned());
+        if full.size().x <= self.max {
+            return full;
+        }
+        // The longest prefix that fits with the ellipsis, by binary search.
+        let chars: Vec<char> = text.chars().collect();
+        let with_dots = |n: usize| chars[..n].iter().collect::<String>() + "…";
+        let fits = |n: usize| layout(with_dots(n)).size().x <= self.max;
+        let (mut lo, mut hi) = (0, chars.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if fits(mid) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        layout(with_dots(lo))
     }
 }
 
@@ -607,10 +648,104 @@ mod tests {
 
     #[test]
     fn human_size_units() {
-        assert_eq!(human_size(512), "512 B");
-        assert_eq!(human_size(1024), "1.0 KB");
-        assert_eq!(human_size(284_103), "277 KB");
-        assert_eq!(human_size(1_572_864), "1.5 MB");
+        let human = |b| Bytes(b).human();
+        assert_eq!(human(512), "512 B");
+        assert_eq!(human(1024), "1.0 KB");
+        assert_eq!(human(284_103), "277 KB");
+        assert_eq!(human(1_572_864), "1.5 MB");
+        assert_eq!(human(3 << 40), "3.0 TB");
+        assert_eq!(human(u64::MAX), "16777216 TB");
+    }
+
+    #[test]
+    fn every_kind_has_a_glyph() {
+        for kind in [
+            Kind::File,
+            Kind::Image,
+            Kind::Document,
+            Kind::Audio,
+            Kind::Video,
+            Kind::Archive,
+        ] {
+            assert!(kind.glyph().starts_with("<svg"));
+        }
+    }
+
+    /// Render one chip and return its paint output, its rect, and the frame's
+    /// texts.
+    fn render(build: impl Fn() -> Attachment) -> (Rect, Vec<String>) {
+        let ui = crate::test_ui::TestUi::new();
+        let mut rect = Rect::NOTHING;
+        let out = ui.frame(|ui| rect = build().show(ui).response.rect);
+        let texts = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        (rect, texts)
+    }
+
+    /// A narrow chip trims its name with an ellipsis.
+    #[test]
+    fn long_names_are_truncated() {
+        let (_, texts) = render(|| {
+            Attachment::new("a-very-long-quarterly-report-final-v2.pdf")
+                .size(Size::Xs)
+                .removable(true)
+                .width(120.0)
+        });
+        assert!(
+            texts.iter().any(|t| t.ends_with('…') && t.len() > 3),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&"PDF".to_owned()));
+    }
+
+    /// A vertical chip stacks the text beneath its tile, so it is taller.
+    #[test]
+    fn vertical_chips_stack() {
+        let (wide, _) = render(|| Attachment::new("a.png").size(Size::Sm));
+        let (tall, texts) = render(|| {
+            Attachment::new("a.png")
+                .size(Size::Sm)
+                .orientation(Orientation::Vertical)
+                .state(State::Error)
+                .description("Upload failed")
+                .removable(true)
+        });
+        assert!(tall.height() > wide.height());
+        assert!((tall.width() - 132.0).abs() < 1e-3);
+        assert!(texts.contains(&"Upload failed".to_owned()));
+    }
+
+    /// Clicking × reports a removal.
+    #[test]
+    fn the_remove_button_reports_removal() {
+        let ui = crate::test_ui::TestUi::new();
+        let rect = std::cell::Cell::new(Rect::NOTHING);
+        let mut removed = false;
+        let mut build = |ui: &mut Ui| {
+            let r = Attachment::new("logo.svg")
+                .image(egui::Image::from_bytes("bytes://logo.svg", FILE.as_bytes()))
+                .state(State::Processing)
+                .removable(true)
+                .show(ui);
+            rect.set(r.response.rect);
+            removed |= r.removed;
+        };
+        ui.frame(&mut build);
+        let m = Metrics::of(Size::Default);
+        let r = rect.get();
+        let close = egui::pos2(
+            r.right() - m.pad - m.close / 2.0,
+            r.top() + m.pad + m.close / 2.0,
+        );
+        ui.click(close, &mut build);
+        drop(build);
+        assert!(removed);
     }
 
     /// A busy attachment that is scrolled OFF-SCREEN must go quiet.

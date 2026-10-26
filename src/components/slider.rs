@@ -107,26 +107,25 @@ impl Widget for Slider<'_> {
         let travel = (x1 - x0).max(f32::EPSILON);
 
         // Drag / click sets the value from the pointer position.
-        if let Some(pos) = response.interact_pointer_pos() {
+        let picked = response.interact_pointer_pos().map(|pos| {
             let raw = ((pos.x - x0) / travel).clamp(0.0, 1.0);
-            let mut v = min + raw * span;
-            if let Some(step) = self.step {
-                if step > 0.0 {
-                    v = (v / step).round() * step;
-                }
-            }
-            let v = v.clamp(min, max);
-            if (v - *self.value).abs() > f32::EPSILON {
-                *self.value = v;
-                response.mark_changed();
-            }
+            let v = raw.mul_add(span, min);
+            let snapped = self
+                .step
+                .filter(|s| *s > 0.0)
+                .map_or(v, |s| (v / s).round() * s);
+            snapped.clamp(min, max)
+        });
+        if let Some(v) = picked.filter(|v| (v - *self.value).abs() > f32::EPSILON) {
+            *self.value = v;
+            response.mark_changed();
         }
 
         let t = ((*self.value - min) / span).clamp(0.0, 1.0);
 
         if ui.is_rect_visible(rect) {
             let cy = rect.center().y;
-            let thumb_x = x0 + travel * t;
+            let thumb_x = f32::mul_add(travel, t, x0);
             let painter = ui.painter();
 
             // Track (full width) + filled range (start → thumb).
@@ -158,5 +157,47 @@ impl Widget for Slider<'_> {
         }
 
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    /// Click `fraction` of the way along a 200pt slider; return the value.
+    fn click_at(fraction: f32, step: Option<f32>) -> f32 {
+        let ui = TestUi::new();
+        let mut value = 0.0;
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut build = |ui: &mut Ui| {
+            let s = Slider::new(&mut value, 0.0..=100.0).width(200.0);
+            let s = match step {
+                Some(step) => s.step(step),
+                None => s,
+            };
+            rect.set(ui.add(s).rect);
+        };
+        ui.frame(&mut build);
+        let r = rect.get();
+        ui.click(
+            egui::pos2(r.width().mul_add(fraction, r.left()), r.center().y),
+            &mut build,
+        );
+        drop(build);
+        value
+    }
+
+    #[test]
+    fn clicking_sets_the_value() {
+        assert!((click_at(0.5, None) - 50.0).abs() < 1.0);
+        assert!(click_at(0.0, None).abs() < f32::EPSILON);
+        assert!((click_at(1.0, None) - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_step_snaps_the_value() {
+        assert!((click_at(0.43, Some(25.0)) - 50.0).abs() < f32::EPSILON);
+        assert!((click_at(0.43, Some(0.0)) - 43.0).abs() < 1.5);
     }
 }

@@ -83,7 +83,7 @@ impl<'a> Accordion<'a> {
     /// section's open state across frames).
     pub fn new(id_source: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
-            id_source: egui::Id::new(id_source),
+            id_source: egui::Id::unique(id_source),
             mode: Mode::default(),
             sections: Vec::new(),
             sizing_hook: SizingHook::default(),

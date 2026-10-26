@@ -154,7 +154,8 @@ impl Drawer {
         open: &mut bool,
         content: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
-        let id = egui::Id::new("glazier-drawer").with(self.title.as_deref().unwrap_or("untitled"));
+        let id =
+            egui::Id::unique("glazier-drawer").with(self.title.as_deref().unwrap_or("untitled"));
         let side = self.side;
         let style_hook = std::mem::take(&mut self.style_hook);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));

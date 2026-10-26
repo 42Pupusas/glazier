@@ -82,7 +82,7 @@ impl Widget for Switch<'_> {
             painter.rect_filled(rect, radius, track_color);
 
             let travel = m.inset.mul_add(-2.0, rect.width() - m.thumb);
-            let cx = rect.left() + m.inset + m.thumb / 2.0 + travel * t;
+            let cx = travel.mul_add(t, rect.left() + m.inset + m.thumb / 2.0);
             let cy = rect.center().y;
             // Opaque `widget` fill — `background` is the app-canvas token and
             // may be translucent under a user theme, which would make the

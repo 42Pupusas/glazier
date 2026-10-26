@@ -47,19 +47,11 @@ impl Grid {
     ///
     /// One `FnMut` is reused for every cell (rather than a list of closures),
     /// so cells can freely share mutable state across the whole grid.
-    #[allow(clippy::cast_precision_loss)] // column counts are tiny
     pub fn show(self, ui: &mut Ui, count: usize, mut cell: impl FnMut(usize, &mut Ui)) {
-        if count == 0 {
-            return;
-        }
-        let cols = self.columns;
         let gap = self.gap;
-        // Equal tracks: divide the row, minus the inter-column gaps.
-        let total = ui.available_width();
-        let col_w = (gap.mul_add(-(cols as f32 - 1.0), total) / cols as f32).max(0.0);
-        let rows = count.div_ceil(cols);
-
-        for r in 0..rows {
+        let col_w = self.column_width(ui.available_width());
+        let indices: Vec<usize> = (0..count).collect();
+        for (r, row) in indices.chunks(self.columns).enumerate() {
             if r > 0 {
                 ui.add_space(gap);
             }
@@ -67,11 +59,7 @@ impl Grid {
             // the next row starts below the tallest cell.
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
-                for c in 0..cols {
-                    let idx = r * cols + c;
-                    if idx >= count {
-                        break;
-                    }
+                for &idx in row {
                     ui.allocate_ui_with_layout(
                         Vec2::new(col_w, 0.0),
                         egui::Layout::top_down(egui::Align::Min),
@@ -83,5 +71,35 @@ impl Grid {
                 }
             });
         }
+    }
+
+    /// Equal tracks: the row minus the inter-column gaps, divided evenly.
+    fn column_width(&self, total: f32) -> f32 {
+        // Column counts are tiny; saturating at `u16::MAX` loses nothing.
+        let cols = f32::from(u16::try_from(self.columns).unwrap_or(u16::MAX));
+        (self.gap.mul_add(-(cols - 1.0), total) / cols).max(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    #[test]
+    fn cells_fill_rows_in_order() {
+        let mut rects = Vec::new();
+        TestUi::new().frame(|ui| {
+            ui.set_width(300.0);
+            Grid::new(2).gap(20.0).show(ui, 3, |_, ui| {
+                rects.push(ui.label("x").rect);
+            });
+            Grid::new(0).show(ui, 0, |_, _| unreachable!());
+        });
+        assert_eq!(rects.len(), 3);
+        assert!((rects[0].top() - rects[1].top()).abs() < f32::EPSILON);
+        assert!((rects[1].left() - rects[0].left() - 160.0).abs() < 1e-3);
+        assert!(rects[2].top() > rects[0].bottom());
+        assert!((Grid::new(3).gap(10.0).column_width(320.0) - 100.0).abs() < 1e-3);
     }
 }

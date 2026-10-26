@@ -24,17 +24,12 @@
 
 use egui::{Response, Sense, Stroke, StrokeKind, Ui, Vec2, Widget};
 
+use super::picker::{Mark, OptionRow, ValueLine};
 use crate::components::dropdown_menu::DropdownMenu;
-use crate::components::icon::Icon;
 use crate::components::input::Input;
 use crate::components::scroll_area::ScrollArea;
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
-
-/// `chevron-down` (lucide) — the trailing affordance on the trigger.
-const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
-/// `check` (lucide) — marks the active option in the popup.
-const CHECK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#;
 
 /// Overridable geometry for [`Combobox`] — reach in via [`Combobox::sizing`].
 #[derive(Clone, Copy, Debug)]
@@ -113,7 +108,7 @@ impl<'a> Combobox<'a> {
             search_placeholder: "Search\u{2026}".to_owned(),
             empty_text: "No results found.".to_owned(),
             width: None,
-            id_salt: egui::Id::new("glazier-combobox"),
+            id_salt: egui::Id::unique("glazier-combobox"),
             compact: false,
             sizing_hook: SizingHook::default(),
         }
@@ -153,7 +148,7 @@ impl<'a> Combobox<'a> {
     /// Disambiguate multiple comboboxes sharing one view (keeps each one's
     /// search filter + focus state separate).
     pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id_salt = egui::Id::new(("glazier-combobox", egui::Id::new(salt)));
+        self.id_salt = egui::Id::unique(("glazier-combobox", egui::Id::unique(salt)));
         self
     }
 
@@ -167,7 +162,7 @@ impl<'a> Combobox<'a> {
         // ---- Trigger: an outline row showing the value or placeholder. ----
         let value = self.options.get(*self.selected).map(String::as_str);
         let label = value.unwrap_or(&self.placeholder);
-        let response = trigger(ui, tokens, width, label, value.is_none(), m);
+        let response = Self::trigger(ui, tokens, width, m).paint(label, value.is_none());
 
         // ---- Popover: a search field over the filtered option list. ----
         // The panel width matches the trigger (with a sensible floor), and
@@ -215,8 +210,17 @@ impl<'a> Combobox<'a> {
                     .collect();
 
                 if matches.is_empty() {
-                    empty_row(ui, tokens, panel_w, &self.empty_text, m);
+                    Self::empty_row(ui, tokens, panel_w, &self.empty_text, m);
                 } else {
+                    let row = OptionRow {
+                        tokens,
+                        width: panel_w,
+                        text: m.text,
+                        pad_x: m.item_pad_x,
+                        pad_y: m.item_pad_y,
+                        min_h: m.item_min_h,
+                        mark: Mark::Check(m.check_col),
+                    };
                     // Render the rows, optionally inside a ScrollArea. We only
                     // wrap when the list *actually* overflows the cap: egui's
                     // ScrollArea latches its offset/content-size in memory, so
@@ -228,17 +232,15 @@ impl<'a> Combobox<'a> {
                         ui.spacing_mut().item_spacing = Vec2::ZERO;
                         for i in &matches {
                             let active = *i == *self.selected;
-                            if option_row(ui, tokens, panel_w, &self.options[*i], active, m)
-                                .clicked()
-                            {
+                            if row.show(ui, &self.options[*i], active).clicked() {
                                 *self.selected = *i;
                                 ui.close();
                             }
                         }
                     };
 
-                    #[allow(clippy::cast_precision_loss)] // tiny option counts
-                    let content_h = matches.len() as f32 * m.item_min_h;
+                    let count = u16::try_from(matches.len()).unwrap_or(u16::MAX);
+                    let content_h = f32::from(count) * m.item_min_h;
                     if content_h > m.list_max_h {
                         ScrollArea::new()
                             .max_height(m.list_max_h)
@@ -261,143 +263,108 @@ impl<'a> Combobox<'a> {
     }
 }
 
-/// Paint the outline trigger row (value/placeholder + trailing chevron) and
-/// return its click [`Response`].
-fn trigger(
-    ui: &mut Ui,
-    tokens: Tokens,
-    width: f32,
-    label: &str,
-    is_placeholder: bool,
-    m: ComboboxMetrics,
-) -> Response {
-    let (rect, response) = ui.allocate_at_least(Vec2::new(width, m.height), Sense::click());
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-
-    if ui.is_rect_visible(rect) {
-        // Outlined input chrome; border tightens to the ring on hover.
-        let stroke = if response.hovered() {
-            Stroke::new(1.0, tokens.ring)
-        } else {
-            Stroke::new(1.0, tokens.input)
-        };
-        // Opaque `widget` surface — `background` is the app-canvas token and
-        // may be translucent under a user theme.
-        ui.painter().rect(
+impl Combobox<'_> {
+    /// Allocate the outlined trigger row.
+    fn trigger(ui: &mut Ui, tokens: Tokens, width: f32, m: ComboboxMetrics) -> Trigger<'_> {
+        let (rect, response) = ui.allocate_at_least(Vec2::new(width, m.height), Sense::click());
+        Trigger {
+            ui,
+            tokens,
+            m,
             rect,
-            tokens.radius_md(),
-            tokens.widget,
-            stroke,
-            StrokeKind::Inside,
-        );
-
-        // Trailing chevron.
-        let chevron_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                rect.right() - m.pad_x - m.chevron,
-                rect.center().y - m.chevron / 2.0,
-            ),
-            Vec2::splat(m.chevron),
-        );
-        Icon::new(CHEVRON_DOWN)
-            .color(tokens.muted_foreground)
-            .image(tokens)
-            .paint_at(ui, chevron_rect);
-
-        // Leading value, truncated so it never collides with the chevron.
-        let color = if is_placeholder {
-            tokens.muted_foreground
-        } else {
-            tokens.foreground
-        };
-        let avail = (m.pad_x.mul_add(-2.0, rect.width()) - m.chevron - m.chevron_gap).max(0.0);
-        let mut job = egui::text::LayoutJob::simple(
-            label.to_owned(),
-            egui::FontId::proportional(m.text),
-            color,
-            avail,
-        );
-        job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
-        let galley = ui.painter().layout_job(job);
-        let pos = egui::pos2(
-            rect.left() + m.pad_x,
-            rect.center().y - galley.size().y / 2.0,
-        );
-        ui.painter().galley(pos, galley, color);
+            response: response.on_hover_cursor(egui::CursorIcon::PointingHand),
+        }
     }
-    response
+
+    /// The muted "no results" row, centred like shadcn's `CommandEmpty`.
+    fn empty_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, m: ComboboxMetrics) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, m.item_min_h), Sense::hover());
+        if ui.is_rect_visible(rect) {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::proportional(m.text),
+                tokens.muted_foreground,
+            );
+        }
+    }
 }
 
-/// One option row: an accent-on-hover command with a leading check when active.
-fn option_row(
-    ui: &mut Ui,
+/// The allocated trigger row, ready to paint.
+struct Trigger<'a> {
+    ui: &'a Ui,
     tokens: Tokens,
-    width: f32,
-    text: &str,
-    active: bool,
     m: ComboboxMetrics,
-) -> Response {
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        egui::FontId::proportional(m.text),
-        tokens.foreground,
-    );
-    let height = 2.0_f32
-        .mul_add(m.item_pad_y, galley.size().y)
-        .max(m.item_min_h);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    rect: egui::Rect,
+    response: Response,
+}
 
-    if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
-        if hovered {
+impl Trigger<'_> {
+    /// Outlined input chrome, its border tightening to the ring on hover,
+    /// around the value line. Returns the click response.
+    fn paint(self, label: &str, is_placeholder: bool) -> Response {
+        let (ui, tokens, m, rect) = (self.ui, self.tokens, self.m, self.rect);
+        if ui.is_rect_visible(rect) {
+            let border = if self.response.hovered() {
+                tokens.ring
+            } else {
+                tokens.input
+            };
+            // Opaque `widget` surface — `background` is the app-canvas token
+            // and may be translucent under a user theme.
             ui.painter().rect(
                 rect,
-                tokens.radius_xl(),
-                tokens.accent,
-                Stroke::NONE,
+                tokens.radius_md(),
+                tokens.widget,
+                Stroke::new(1.0, border),
                 StrokeKind::Inside,
             );
+            ValueLine {
+                pad_x: m.pad_x,
+                text: m.text,
+                chevron: m.chevron,
+                chevron_gap: m.chevron_gap,
+            }
+            .paint(ui, tokens, rect, label, is_placeholder);
         }
-        let text_color = if hovered {
-            tokens.accent_foreground
-        } else {
-            tokens.foreground
-        };
-        // Leading check column (drawn only when active).
-        if active {
-            let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + m.item_pad_x, rect.center().y - 8.0),
-                Vec2::splat(16.0),
-            );
-            Icon::new(CHECK)
-                .color(text_color)
-                .image(tokens)
-                .paint_at(ui, icon_rect);
-        }
-        let galley = ui.painter().layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::proportional(m.text),
-            text_color,
-        );
-        let pos = egui::pos2(
-            rect.left() + m.item_pad_x + m.check_col,
-            rect.center().y - galley.size().y / 2.0,
-        );
-        ui.painter().galley(pos, galley, text_color);
+        self.response
     }
-    response
 }
 
-/// The muted "no results" placeholder row, centered like shadcn's `CommandEmpty`.
-fn empty_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, m: ComboboxMetrics) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, m.item_min_h), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            text,
-            egui::FontId::proportional(m.text),
-            tokens.muted_foreground,
-        );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    const FRAMEWORKS: [&str; 4] = ["Next.js", "SvelteKit", "Remix", "Astro"];
+
+    /// Open, filter, and pick; an unmatched filter shows the empty text.
+    #[test]
+    fn filtering_then_picking_writes_the_index() {
+        let ui = TestUi::new();
+        let mut selected = 9;
+        let mut build = |ui: &mut Ui| {
+            Combobox::new(&mut selected, FRAMEWORKS)
+                .placeholder("Pick")
+                .empty_text("None")
+                .id_salt("fw")
+                .compact(true)
+                .width(240.0)
+                .show(ui);
+        };
+        let out = ui.frame(&mut build);
+        ui.click(TestUi::text_rect(&out, "Pick").center(), &mut build);
+        ui.frame(&mut build);
+        ui.frame_with(vec![egui::Event::Text("zz".to_owned())], &mut build);
+        let out = ui.frame(&mut build);
+        assert!(TestUi::text_x(&out, "None") > 0.0);
+        let erase = TestUi::key(egui::Key::Backspace);
+        ui.frame_with(vec![erase.clone(), erase], &mut build);
+        ui.frame_with(vec![egui::Event::Text("rem".to_owned())], &mut build);
+        let out = ui.frame(&mut build);
+        ui.click(TestUi::text_rect(&out, "Remix").center(), &mut build);
+        drop(build);
+        assert_eq!(selected, 2);
     }
 }

@@ -5,7 +5,9 @@
 //! while pressed (on). Borrows `&mut bool`. Carries an optional leading [`Icon`]
 //! and label, sized with the same scale as [`Button`](crate::Button).
 
-use egui::{Color32, Response, Sense, Stroke, Ui, Vec2, Widget, WidgetText};
+use std::sync::Arc;
+
+use egui::{Color32, Galley, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, Widget, WidgetText};
 
 use crate::components::icon::Icon;
 use crate::sizing::{Sizeable, SizingHook};
@@ -44,6 +46,43 @@ pub enum Variant {
     /// border, `accent` on hover) and a **secondary** button when on (secondary
     /// fill, no border).
     Outline,
+}
+
+impl Variant {
+    /// `(fill, border, text)` for the eased on (`on_t`) and hover (`hover_t`)
+    /// values.
+    fn paint(self, tokens: Tokens, on_t: f32, hover_t: f32) -> (Color32, Stroke, Color32) {
+        // `widget`, not `background` — the app-canvas token can be
+        // translucent under a user theme.
+        let lift = |t: f32| {
+            if t < 0.01 {
+                Color32::TRANSPARENT
+            } else {
+                tokens.widget.lerp_to_gamma(tokens.accent, t)
+            }
+        };
+        match self {
+            // Ghost: transparent off, gliding to `accent` on hover or press.
+            Self::Default => (
+                lift(hover_t.max(on_t)),
+                Stroke::NONE,
+                tokens
+                    .foreground
+                    .lerp_to_gamma(tokens.accent_foreground, on_t),
+            ),
+            // Off is an outline button, on a `primary` chip. Both ends are
+            // solid, so the off look lerps straight to `primary` with no
+            // neutral midpoint to stall on; the border fades out as the chip
+            // fades in.
+            Self::Outline => (
+                lift(hover_t).lerp_to_gamma(tokens.primary, on_t),
+                Stroke::new(1.0, tokens.border.gamma_multiply(1.0 - on_t)),
+                tokens
+                    .foreground
+                    .lerp_to_gamma(tokens.primary_foreground, on_t),
+            ),
+        }
+    }
 }
 
 /// Size of a [`Toggle`], mirroring shadcn's size prop.
@@ -141,34 +180,19 @@ impl Widget for Toggle<'_> {
     fn ui(mut self, ui: &mut Ui) -> Response {
         let tokens = Tokens::get(ui);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
-        let padding = self.size.padding();
-
-        let rich = self.text.into_galley(
-            ui,
-            Some(egui::TextWrapMode::Extend),
-            f32::INFINITY,
-            egui::TextStyle::Button,
-        );
-        let has_label = rich.size().x > 0.0;
-        let has_icon = self.icon.is_some();
-        let gap = if has_label && has_icon {
-            m.icon_gap
-        } else {
-            0.0
+        let content = Content {
+            galley: self.text.into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            ),
+            icon: self.icon,
+            m,
         };
-        let icon_w = if has_icon { m.icon_size } else { 0.0 };
-        let content_w = rich.size().x + icon_w + gap;
-
-        let desired = Vec2::new(
-            padding
-                .x
-                .mul_add(2.0, content_w)
-                .max(self.size.min_height()),
-            padding
-                .y
-                .mul_add(2.0, rich.size().y)
-                .max(self.size.min_height()),
-        );
+        // At least square at the minimum height.
+        let min = self.size.min_height();
+        let desired = (content.size() + self.size.padding() * 2.0).max(Vec2::splat(min));
         let (rect, mut response) = ui.allocate_at_least(desired, Sense::click());
 
         if response.clicked() {
@@ -187,70 +211,115 @@ impl Widget for Toggle<'_> {
         );
 
         if ui.is_rect_visible(rect) {
-            let radius = tokens.radius_md();
-            let (fill, stroke, text_col) = match self.variant {
-                // Ghost toggle: transparent off, gliding to `accent` on
-                // hover/press.
-                Variant::Default => {
-                    let lit = hover_t.max(on_t);
-                    let fill = if lit < 0.01 {
-                        Color32::TRANSPARENT
-                    } else {
-                        // `widget`, not `background` — the app-canvas token
-                        // can be translucent under a user theme.
-                        tokens.widget.lerp_to_gamma(tokens.accent, lit)
-                    };
-                    let text = tokens
-                        .foreground
-                        .lerp_to_gamma(tokens.accent_foreground, on_t);
-                    (fill, Stroke::NONE, text)
-                }
-                // Off → outline button (transparent fill + hairline border,
-                // gliding to `accent` on hover); on → primary button (`primary`
-                // fill, no border). Both ends are *solid*, so we lerp the off
-                // look straight to `primary` by `on_t` — a single solid→solid
-                // blend that always completes, with no neutral midpoint to get
-                // stuck on. The border and the off-state accent lift fade out
-                // as the chip fades in. `primary` keeps real contrast in both
-                // palettes (white chip + dark text in dark mode; dark chip +
-                // light text in light mode).
-                Variant::Outline => {
-                    let off = if hover_t < 0.01 {
-                        Color32::TRANSPARENT
-                    } else {
-                        // `widget`, not `background` — the app-canvas token
-                        // can be translucent under a user theme.
-                        tokens.widget.lerp_to_gamma(tokens.accent, hover_t)
-                    };
-                    let fill = off.lerp_to_gamma(tokens.primary, on_t);
-                    let text = tokens
-                        .foreground
-                        .lerp_to_gamma(tokens.primary_foreground, on_t);
-                    // Border belongs to the outline (off) look; fade it out as
-                    // the primary chip takes over.
-                    let stroke = Stroke::new(1.0, tokens.border.gamma_multiply(1.0 - on_t));
-                    (fill, stroke, text)
-                }
-            };
-
-            ui.painter()
-                .rect(rect, radius, fill, stroke, egui::StrokeKind::Inside);
-
-            let mut cursor = rect.center().x - content_w / 2.0;
-            let cy = rect.center().y;
-            if let Some(icon) = self.icon {
-                let r = egui::Rect::from_min_size(
-                    egui::pos2(cursor, cy - m.icon_size / 2.0),
-                    Vec2::splat(m.icon_size),
-                );
-                icon.color(text_col).image(tokens).paint_at(ui, r);
-                cursor += m.icon_size + gap;
-            }
-            let galley_size = rich.size();
-            ui.painter()
-                .galley(egui::pos2(cursor, cy - galley_size.y / 2.0), rich, text_col);
+            let (fill, stroke, text) = self.variant.paint(tokens, on_t, hover_t);
+            ui.painter().rect(
+                rect,
+                tokens.radius_md(),
+                fill,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            content.paint(ui, rect.center(), text, tokens);
         }
 
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
+}
+
+/// A toggle's optional leading icon and label, laid out as one run.
+struct Content {
+    galley: Arc<Galley>,
+    icon: Option<Icon>,
+    m: ToggleMetrics,
+}
+
+impl Content {
+    /// The gap between icon and label, when there are both.
+    fn gap(&self) -> f32 {
+        if self.icon.is_some() && self.galley.size().x > 0.0 {
+            self.m.icon_gap
+        } else {
+            0.0
+        }
+    }
+
+    fn size(&self) -> Vec2 {
+        let icon_w = self.icon.map_or(0.0, |_| self.m.icon_size);
+        self.galley.size() + Vec2::X * (icon_w + self.gap())
+    }
+
+    /// Paint the run centred on `center`.
+    fn paint(&self, ui: &Ui, center: Pos2, color: Color32, tokens: Tokens) {
+        let size = self.m.icon_size;
+        let mut x = center.x - self.size().x / 2.0;
+        if let Some(icon) = self.icon {
+            let r = Rect::from_min_size(Pos2::new(x, center.y - size / 2.0), Vec2::splat(size));
+            icon.color(color).image(tokens).paint_at(ui, r);
+            x += size + self.gap();
+        }
+        let pos = Pos2::new(x, center.y - self.galley.size().y / 2.0);
+        ui.painter().galley(pos, self.galley.clone(), color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    const DOT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>"#;
+
+    /// Clicking flips the bound value both ways, for each variant.
+    #[test]
+    fn clicking_flips_the_value() {
+        for variant in [Variant::Default, Variant::Outline] {
+            let ui = TestUi::new();
+            let mut on = false;
+            let mut build = |ui: &mut Ui| {
+                Toggle::new(&mut on, "Bold")
+                    .icon(Icon::new(DOT))
+                    .variant(variant)
+                    .size(Size::Large)
+                    .ui(ui);
+            };
+            let out = ui.frame(&mut build);
+            let label = TestUi::text_rect(&out, "Bold").center();
+            ui.click(label, &mut build);
+            ui.click(label, &mut build);
+            ui.click(label, &mut build);
+            drop(build);
+            assert!(on, "{variant:?}");
+        }
+    }
+
+    /// An icon-only toggle is square at its minimum height.
+    #[test]
+    fn icon_only_toggle_is_square() {
+        let ui = TestUi::new();
+        let mut on = false;
+        let mut size = Vec2::ZERO;
+        ui.frame(|ui| {
+            ui.horizontal(|ui| {
+                size = Toggle::new(&mut on, "")
+                    .icon(Icon::new(DOT))
+                    .size(Size::Small)
+                    .ui(ui)
+                    .rect
+                    .size();
+            });
+        });
+        assert_eq!(size, Vec2::splat(Size::Small.min_height()));
+    }
+
+    /// The outline border fades out as the toggle turns on.
+    #[test]
+    fn outline_border_fades_when_on() {
+        let tokens = Tokens::from_visuals(&egui::Visuals::light());
+        let (_, off, _) = Variant::Outline.paint(tokens, 0.0, 0.0);
+        let (_, on, _) = Variant::Outline.paint(tokens, 1.0, 1.0);
+        assert_eq!(off.color, tokens.border);
+        assert_eq!(on.color.a(), 0);
+        let (fill, _, _) = Variant::Default.paint(tokens, 0.0, 0.0);
+        assert_eq!(fill, Color32::TRANSPARENT);
     }
 }

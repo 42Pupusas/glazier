@@ -17,13 +17,10 @@
 
 use egui::{Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+use super::picker::{Mark, OptionRow, ValueLine};
 use crate::components::dropdown_menu::DropdownMenu;
-use crate::components::icon::Icon;
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
-
-/// `chevron-down` (lucide) — the trailing affordance.
-const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 
 /// Overridable geometry for [`NativeSelect`] — reach in via
 /// [`NativeSelect::sizing`].
@@ -141,52 +138,33 @@ impl<'a> NativeSelect<'a> {
                 stroke,
                 StrokeKind::Inside,
             );
-
-            // Trailing chevron.
-            let chevron_rect = egui::Rect::from_min_size(
-                egui::pos2(
-                    rect.right() - m.pad_x - m.chevron,
-                    rect.center().y - m.chevron / 2.0,
-                ),
-                Vec2::splat(m.chevron),
-            );
-            Icon::new(CHEVRON_DOWN)
-                .color(tokens.muted_foreground)
-                .image(tokens)
-                .paint_at(ui, chevron_rect);
-
-            // Leading value, truncated so it never collides with the chevron.
-            let color = if is_placeholder {
-                tokens.muted_foreground
-            } else {
-                tokens.foreground
-            };
-            let avail = (m.pad_x.mul_add(-2.0, rect.width()) - m.chevron - m.chevron_gap).max(0.0);
-            let mut job = egui::text::LayoutJob::simple(
-                value.to_owned(),
-                egui::FontId::proportional(m.text),
-                color,
-                avail,
-            );
-            job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
-            let galley = ui.painter().layout_job(job);
-            let pos = egui::pos2(
-                rect.left() + m.pad_x,
-                rect.center().y - galley.size().y / 2.0,
-            );
-            ui.painter().galley(pos, galley, color);
+            ValueLine {
+                pad_x: m.pad_x,
+                text: m.text,
+                chevron: m.chevron,
+                chevron_gap: m.chevron_gap,
+            }
+            .paint(ui, tokens, rect, value, is_placeholder);
         }
 
-        // Option popover, hung off the trigger.
-        let trigger_w = response.rect.width();
+        // Option popover, hung off the trigger; the current value stays tinted.
+        let row = OptionRow {
+            tokens,
+            width: response.rect.width(),
+            text: m.text,
+            pad_x: m.item_pad_x,
+            pad_y: m.item_pad_y,
+            min_h: m.item_min_h,
+            mark: Mark::Tint,
+        };
         egui::Popup::menu(&response)
             .frame(DropdownMenu::frame(tokens))
             .gap(4.0)
             .show(|ui| {
-                ui.set_min_width(trigger_w);
+                ui.set_min_width(row.width);
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
                 for (i, option) in self.options.iter().enumerate() {
-                    if option_row(ui, tokens, trigger_w, option, i == *self.selected, m).clicked() {
+                    if row.show(ui, option, i == *self.selected).clicked() {
                         *self.selected = i;
                         ui.close();
                     }
@@ -197,51 +175,27 @@ impl<'a> NativeSelect<'a> {
     }
 }
 
-/// One option row: accent-on-hover, the active row tinted to the accent fill.
-fn option_row(
-    ui: &mut Ui,
-    tokens: Tokens,
-    width: f32,
-    text: &str,
-    active: bool,
-    m: NativeSelectMetrics,
-) -> Response {
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        egui::FontId::proportional(m.text),
-        tokens.foreground,
-    );
-    let height = 2.0_f32
-        .mul_add(m.item_pad_y, galley.size().y)
-        .max(m.item_min_h);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
 
-    if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
-        if hovered || active {
-            ui.painter().rect(
-                rect,
-                tokens.radius_xl(),
-                tokens.accent,
-                Stroke::NONE,
-                StrokeKind::Inside,
-            );
-        }
-        let text_color = if hovered || active {
-            tokens.accent_foreground
-        } else {
-            tokens.foreground
+    /// Clicking the trigger opens the menu; clicking an option picks it.
+    #[test]
+    fn picking_an_option_writes_the_index() {
+        let ui = TestUi::new();
+        let mut size = 9;
+        let mut build = |ui: &mut Ui| {
+            NativeSelect::new(&mut size, ["Small", "Medium", "Large"])
+                .placeholder("Pick a size")
+                .width(200.0)
+                .show(ui);
         };
-        let galley = ui.painter().layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::proportional(m.text),
-            text_color,
-        );
-        let pos = egui::pos2(
-            rect.left() + m.item_pad_x,
-            rect.center().y - galley.size().y / 2.0,
-        );
-        ui.painter().galley(pos, galley, text_color);
+        let out = ui.frame(&mut build);
+        ui.click(TestUi::text_rect(&out, "Pick a size").center(), &mut build);
+        let out = ui.frame(&mut build);
+        ui.click(TestUi::text_rect(&out, "Large").center(), &mut build);
+        drop(build);
+        assert_eq!(size, 2);
     }
-    response
 }

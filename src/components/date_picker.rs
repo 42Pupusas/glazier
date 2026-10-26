@@ -123,7 +123,7 @@ impl<'a> DatePicker<'a> {
             today: None,
             placeholder: "Pick a date".to_owned(),
             width: None,
-            id_salt: egui::Id::new("glazier-date-picker"),
+            id_salt: egui::Id::unique("glazier-date-picker"),
             sizing_hook: SizingHook::new(),
         }
     }
@@ -158,7 +158,7 @@ impl<'a> DatePicker<'a> {
 
     /// Disambiguate multiple date pickers in one view.
     pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id_salt = egui::Id::new(("glazier-date-picker", egui::Id::new(salt)));
+        self.id_salt = egui::Id::unique(("glazier-date-picker", egui::Id::unique(salt)));
         self
     }
 

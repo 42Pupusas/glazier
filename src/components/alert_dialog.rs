@@ -126,7 +126,7 @@ impl AlertDialog {
     /// dialog should close; the returned [`AlertChoice`] reports *how* it closed
     /// (or `None` if it stayed open / was already shut this frame).
     pub fn show(mut self, ctx: &egui::Context, open: &mut bool) -> Option<AlertChoice> {
-        let id = egui::Id::new("glazier-alert-dialog");
+        let id = egui::Id::unique("glazier-alert-dialog");
         let style_hook = std::mem::take(&mut self.style_hook);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
 
@@ -295,7 +295,7 @@ mod tests {
                 .show(ui.ctx(), open);
         });
         output.textures_delta.clear();
-        let card_id = egui::Id::new("glazier-alert-dialog").with("card_size");
+        let card_id = egui::Id::unique("glazier-alert-dialog").with("card_size");
         ctx.data(|d| d.get_temp::<Vec2>(card_id))
             .unwrap_or(Vec2::ZERO)
     }

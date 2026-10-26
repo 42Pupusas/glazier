@@ -382,9 +382,9 @@ fn main() -> eframe::Result {
         // while in flight, then holds the endpoint value.) A short duration plus
         // ease-out keeps it feeling snappy rather than laggy — it moves fast off
         // the mark and decelerates into the new theme.
-        let linear = ui
-            .ctx()
-            .animate_bool_with_time(egui::Id::new("theme_transition"), dark, 0.35);
+        let linear =
+            ui.ctx()
+                .animate_bool_with_time(egui::Id::unique("theme_transition"), dark, 0.35);
         let theme_t = ease_out_cubic(linear);
         let blended = Tokens::light().lerp(&Tokens::dark(), theme_t);
         // Pick the egui base by the half-way point to keep shadows/selection sane.
@@ -655,7 +655,7 @@ fn showcase_grid(ui: &mut egui::Ui, tokens: Tokens, state: &mut State) {
     // a plain round-robin leaves one column much taller). Heights are cached in
     // egui memory keyed by card index; unseen cards assume a typical height so
     // the very first frame is still reasonable.
-    let cache_id = egui::Id::new("gallery-card-heights");
+    let cache_id = egui::Id::unique("gallery-card-heights");
     let heights: Vec<f32> = ui.ctx().memory_mut(|m| {
         m.data
             .get_temp::<std::sync::Arc<Vec<f32>>>(cache_id)
@@ -3197,7 +3197,7 @@ fn bar_chart(ui: &mut egui::Ui, tokens: Tokens, values: &[f32], labels: &[&str])
     );
     let n = values.len();
     let gap = 12.0; // gap-3
-    let bar_w = (rect.width() - gap * (n as f32 - 1.0)) / n as f32;
+    let bar_w = f32::mul_add(gap, -(n as f32 - 1.0), rect.width()) / n as f32;
     // `rounded-t-md`: round the top corners only.
     let r = tokens.radius_md();
     let top_round = egui::CornerRadius {

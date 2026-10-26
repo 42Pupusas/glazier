@@ -47,33 +47,45 @@ impl Widget for Separator {
     fn ui(self, ui: &mut Ui) -> Response {
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
         let thickness = stroke.width.max(1.0);
-
-        let (rect, response) = match self.orientation {
-            Orientation::Horizontal => {
-                let width = ui.available_width();
-                ui.allocate_at_least(Vec2::new(width, thickness), Sense::hover())
-            }
-            Orientation::Vertical => {
-                let height = ui.available_height();
-                ui.allocate_at_least(Vec2::new(thickness, height), Sense::hover())
-            }
+        let avail = ui.available_size();
+        let size = match self.orientation {
+            Orientation::Horizontal => Vec2::new(avail.x, thickness),
+            Orientation::Vertical => Vec2::new(thickness, avail.y),
         };
-
-        if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
-            let stroke = Stroke::new(thickness, stroke.color);
-            match self.orientation {
-                Orientation::Horizontal => {
-                    let y = rect.center().y;
-                    painter.hline(rect.x_range(), y, stroke);
-                }
-                Orientation::Vertical => {
-                    let x = rect.center().x;
-                    painter.vline(x, rect.y_range(), stroke);
-                }
+        let (rect, response) = ui.allocate_at_least(size, Sense::hover());
+        // A line through the rect's centre along its long side.
+        let c = rect.center();
+        let ends = match self.orientation {
+            Orientation::Horizontal => {
+                [egui::pos2(rect.left(), c.y), egui::pos2(rect.right(), c.y)]
             }
+            Orientation::Vertical => [egui::pos2(c.x, rect.top()), egui::pos2(c.x, rect.bottom())],
+        };
+        if ui.is_rect_visible(rect) {
+            ui.painter()
+                .line_segment(ends, Stroke::new(thickness, stroke.color));
         }
-
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    #[test]
+    fn each_orientation_spans_its_axis() {
+        let mut sizes = Vec::new();
+        TestUi::new().frame(|ui| {
+            sizes.push(Separator::new().ui(ui).rect.size());
+            ui.horizontal(|ui| {
+                ui.set_height(40.0);
+                let s = Separator::default().orientation(Orientation::Vertical);
+                sizes.push(s.ui(ui).rect.size());
+            });
+        });
+        assert!(sizes[0].x > 100.0 && sizes[0].y <= 1.0 + f32::EPSILON);
+        assert!(sizes[1].y >= 40.0 && sizes[1].x <= 1.0 + f32::EPSILON);
     }
 }

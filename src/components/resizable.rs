@@ -7,7 +7,7 @@
 //! caller's side. The handle shows a resize cursor on hover and an optional
 //! grip dot-row (shadcn's `withHandle`).
 
-use egui::{Color32, CursorIcon, Response, Sense, Ui, Vec2, Widget};
+use egui::{Color32, CursorIcon, Pos2, Rect, Response, Sense, Ui, Vec2, Widget};
 
 use crate::customize::{Customize, StyleHook};
 use crate::sizing::{Sizeable, SizingHook};
@@ -21,6 +21,63 @@ pub enum Direction {
     Horizontal,
     /// Panels stacked, divider horizontal (shadcn `direction="vertical"`).
     Vertical,
+}
+
+impl Direction {
+    /// A vector with `along` on the split axis and `cross` across it.
+    const fn vec(self, along: f32, cross: f32) -> Vec2 {
+        match self {
+            Self::Horizontal => Vec2::new(along, cross),
+            Self::Vertical => Vec2::new(cross, along),
+        }
+    }
+
+    /// The split-axis component of `v`.
+    const fn along(self, v: Vec2) -> f32 {
+        match self {
+            Self::Horizontal => v.x,
+            Self::Vertical => v.y,
+        }
+    }
+
+    /// The cross-axis component of `v`.
+    const fn cross(self, v: Vec2) -> f32 {
+        match self {
+            Self::Horizontal => v.y,
+            Self::Vertical => v.x,
+        }
+    }
+
+    const fn cursor(self) -> CursorIcon {
+        match self {
+            Self::Horizontal => CursorIcon::ResizeHorizontal,
+            Self::Vertical => CursorIcon::ResizeVertical,
+        }
+    }
+
+    /// Cut `rect` into the first pane, the divider, and the second pane.
+    fn split(self, rect: Rect, first: f32, divider: f32) -> [Rect; 3] {
+        let cross = self.cross(rect.size());
+        let second = self.along(rect.size()) - first - divider;
+        let at = |offset: f32| rect.min + self.vec(offset, 0.0);
+        [
+            Rect::from_min_size(at(0.0), self.vec(first, cross)),
+            Rect::from_min_size(at(first), self.vec(divider, cross)),
+            Rect::from_min_size(at(first + divider), self.vec(second, cross)),
+        ]
+    }
+
+    /// Paint the drag grip: a translucent pill across the divider holding
+    /// three dots in a row along it.
+    fn paint_grip(self, ui: &Ui, center: Pos2, color: Color32) {
+        let bar = Rect::from_center_size(center, self.vec(10.0, 24.0));
+        ui.painter()
+            .rect_filled(bar, 4.0, color.gamma_multiply(0.30));
+        for s in [-5.0_f32, 0.0, 5.0] {
+            ui.painter()
+                .circle_filled(center + self.vec(0.0, s), 1.5, color);
+        }
+    }
 }
 
 /// Overridable geometry for [`Resizable`] — reach in via
@@ -108,7 +165,7 @@ impl Resizable {
     /// Create a split identified by `id_source` (persists the divider position).
     pub fn new(id_source: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
-            id_source: egui::Id::new(id_source),
+            id_source: egui::Id::unique(id_source),
             direction: Direction::default(),
             default_fraction: 0.5,
             min_fraction: 0.1,
@@ -157,165 +214,88 @@ impl Resizable {
         first: impl FnOnce(&mut Ui),
         second: impl FnOnce(&mut Ui),
     ) -> Response {
-        let tokens = Tokens::get(ui);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
-        let style = resolve_style(tokens, std::mem::take(&mut self.style_hook));
+        let style = self.resolve_style(ui);
         let id = ui.make_persistent_id(self.id_source);
-        let horizontal = self.direction == Direction::Horizontal;
+        let dir = self.direction;
 
-        // Total span along the split axis, and the fixed cross size.
-        let avail = ui.available_size();
-        let (along, cross) = if horizontal {
-            (avail.x, self.size.unwrap_or_else(|| avail.y.max(120.0)))
-        } else {
-            (avail.y, self.size.unwrap_or(avail.x))
-        };
-
-        // Persisted split fraction.
-        let mut fraction = ui
+        let (rect, _) = ui.allocate_exact_size(self.block_size(ui), Sense::hover());
+        let span = dir.along(rect.size()) - m.divider;
+        let fraction = ui
             .ctx()
             .data_mut(|d| *d.get_temp_mut_or(id, self.default_fraction));
-        fraction = fraction.clamp(self.min_fraction, 1.0 - self.min_fraction);
+        let first_len = span * self.clamp(fraction);
+        let [first_rect, divider, second_rect] = dir.split(rect, first_len, m.divider);
 
-        // Reserve the whole block.
-        let size = if horizontal {
-            Vec2::new(along, cross)
-        } else {
-            Vec2::new(cross, along)
-        };
-        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-
-        let first_len = (along - m.divider) * fraction;
-        let second_len = (along - m.divider) - first_len;
-
-        // Compute the three sub-rects.
-        let (first_rect, divider_rect, second_rect) = if horizontal {
-            let x0 = rect.left();
-            let xd = x0 + first_len;
-            (
-                egui::Rect::from_min_size(rect.left_top(), Vec2::new(first_len, cross)),
-                egui::Rect::from_min_size(egui::pos2(xd, rect.top()), Vec2::new(m.divider, cross)),
-                egui::Rect::from_min_size(
-                    egui::pos2(xd + m.divider, rect.top()),
-                    Vec2::new(second_len, cross),
-                ),
-            )
-        } else {
-            let y0 = rect.top();
-            let yd = y0 + first_len;
-            (
-                egui::Rect::from_min_size(rect.left_top(), Vec2::new(cross, first_len)),
-                egui::Rect::from_min_size(egui::pos2(rect.left(), yd), Vec2::new(cross, m.divider)),
-                egui::Rect::from_min_size(
-                    egui::pos2(rect.left(), yd + m.divider),
-                    Vec2::new(cross, second_len),
-                ),
-            )
-        };
-
-        // Interact over a wider hit-strip centred on the divider. Done
-        // before the panes render so dragging feels immediate, but the
-        // *painting* of the hairline/grip happens after (below) — a pane
-        // with an edge-to-edge opaque fill (e.g. a `Card`) would otherwise
-        // draw right over the handle, hiding it entirely.
-        let hit = if horizontal {
-            egui::Rect::from_center_size(divider_rect.center(), Vec2::new(m.hit, cross))
-        } else {
-            egui::Rect::from_center_size(divider_rect.center(), Vec2::new(cross, m.hit))
-        };
+        // Hit-test before the panes render so dragging feels immediate; the
+        // handle is painted after them (below).
+        let hit = Rect::from_center_size(divider.center(), dir.vec(m.hit, dir.cross(rect.size())));
         let drag = ui.interact(hit, id.with("handle"), Sense::drag());
-        let cursor = if horizontal {
-            CursorIcon::ResizeHorizontal
-        } else {
-            CursorIcon::ResizeVertical
-        };
-        if drag.hovered() || drag.dragged() {
-            ui.ctx().set_cursor_icon(cursor);
+        let active = drag.hovered() || drag.dragged();
+        if active {
+            ui.ctx().set_cursor_icon(dir.cursor());
         }
         if drag.dragged() {
-            let delta = if horizontal {
-                drag.drag_delta().x
-            } else {
-                drag.drag_delta().y
-            };
-            fraction = ((first_len + delta) / (along - m.divider))
-                .clamp(self.min_fraction, 1.0 - self.min_fraction);
+            let fraction = self.clamp((first_len + dir.along(drag.drag_delta())) / span);
             ui.ctx().data_mut(|d| d.insert_temp(id, fraction));
         }
 
-        // Render each pane clipped to its rect.
-        // Always use top_down layout so pane content flows vertically
-        // regardless of the parent layout (e.g. horizontal_top).
-        let pane_layout = egui::Layout::top_down(egui::Align::Min);
-        let mut child = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(first_rect)
-                .layout(pane_layout),
-        );
-        child.set_clip_rect(first_rect);
-        first(&mut child);
+        Self::pane(ui, first_rect, first);
+        Self::pane(ui, second_rect, second);
 
-        let mut child = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(second_rect)
-                .layout(pane_layout),
-        );
-        child.set_clip_rect(second_rect);
-        second(&mut child);
-
-        // Paint the divider hairline and optional grip *after* both panes,
-        // so an edge-to-edge opaque pane fill (e.g. a `Card`) never covers
-        // the handle — draw calls issued later land on top within the same
-        // layer.
-        ui.painter().rect_filled(divider_rect, 0.0, style.divider);
+        // Painted after both panes so an edge-to-edge opaque pane fill (e.g. a
+        // `Card`) never covers the handle.
+        ui.painter().rect_filled(divider, 0.0, style.divider);
         if self.handle_grip {
-            let active = drag.hovered() || drag.dragged();
             let color = if active {
                 style.grip_active
             } else {
                 style.grip_inactive
             };
-            paint_grip(ui, divider_rect.center(), horizontal, color);
+            dir.paint_grip(ui, divider.center(), color);
         }
-
         drag
     }
-}
 
-/// Resolve [`ResizableStyle`]'s defaults against `tokens`, then apply any
-/// pending [`Resizable::style`] hook. Split out of `show` to keep it under
-/// clippy's line-count ceiling.
-fn resolve_style(tokens: Tokens, hook: StyleHook<ResizableStyle>) -> ResizableStyle {
-    let mut style = ResizableStyle {
-        divider: tokens.border,
-        grip_active: tokens.foreground,
-        grip_inactive: tokens.muted_foreground,
-    };
-    hook.apply(&mut style);
-    style
-}
-
-/// Paint the drag grip: a rounded pill centred on the divider with three dots
-/// perpendicular to the split axis.
-///
-/// Horizontal split (vertical divider): pill is `10 × 24`, dots stacked vertically.
-/// Vertical split (horizontal divider): pill is `24 × 10`, dots side by side.
-fn paint_grip(ui: &Ui, center: egui::Pos2, horizontal: bool, color: egui::Color32) {
-    let (w, h) = if horizontal {
-        (10.0, 24.0)
-    } else {
-        (24.0, 10.0)
-    };
-    let bar = egui::Rect::from_center_size(center, Vec2::new(w, h));
-    ui.painter()
-        .rect_filled(bar, 4.0, color.gamma_multiply(0.30));
-    for s in [-5.0_f32, 0.0, 5.0] {
-        let p = if horizontal {
-            egui::pos2(center.x, center.y + s)
+    /// The whole block: the available span along the split axis, and the
+    /// fixed or available size across it. A horizontal split is never shorter
+    /// than 120pt by default.
+    fn block_size(&self, ui: &Ui) -> Vec2 {
+        let dir = self.direction;
+        let avail = ui.available_size();
+        let floor = if dir == Direction::Horizontal {
+            120.0
         } else {
-            egui::pos2(center.x + s, center.y)
+            0.0
         };
-        ui.painter().circle_filled(p, 1.5, color);
+        let cross = self.size.unwrap_or_else(|| dir.cross(avail).max(floor));
+        dir.vec(dir.along(avail), cross)
+    }
+
+    fn clamp(&self, fraction: f32) -> f32 {
+        fraction.clamp(self.min_fraction, 1.0 - self.min_fraction)
+    }
+
+    /// Run `content` in a top-down child clipped to `rect`, whatever the
+    /// parent's layout.
+    fn pane(ui: &mut Ui, rect: Rect, content: impl FnOnce(&mut Ui)) {
+        let layout = egui::Layout::top_down(egui::Align::Min);
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout));
+        child.set_clip_rect(rect);
+        content(&mut child);
+    }
+
+    /// Resolve [`ResizableStyle`]'s defaults against the tokens, then apply any
+    /// pending [`Resizable::style`] hook.
+    fn resolve_style(&mut self, ui: &Ui) -> ResizableStyle {
+        let tokens = Tokens::get(ui);
+        let mut style = ResizableStyle {
+            divider: tokens.border,
+            grip_active: tokens.foreground,
+            grip_inactive: tokens.muted_foreground,
+        };
+        std::mem::take(&mut self.style_hook).apply(&mut style);
+        style
     }
 }
 
@@ -323,5 +303,63 @@ impl Widget for Resizable {
     /// Renders two empty panes. Use [`Resizable::show`] for content.
     fn ui(self, ui: &mut Ui) -> Response {
         self.show(ui, |_| {}, |_| {})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    /// Drag the handle by `delta` along the split axis and return the first
+    /// pane's width share before and after.
+    fn drag_by(dir: Direction, delta: f32) -> (f32, f32) {
+        let ui = TestUi::new();
+        let first = std::cell::Cell::new(Rect::NOTHING);
+        let handle = std::cell::Cell::new(Rect::NOTHING);
+        let mut build = |ui: &mut Ui| {
+            let r = Resizable::new("split")
+                .direction(dir)
+                .size(200.0)
+                .handle_grip(true)
+                .show(ui, |ui| first.set(ui.max_rect()), |_| {});
+            handle.set(r.rect);
+        };
+        ui.frame(&mut build);
+        let before = dir.along(first.get().size());
+        let from = handle.get().center();
+        ui.drag(from, from + dir.vec(delta, 0.0), &mut build);
+        ui.frame(&mut build);
+        (before, dir.along(first.get().size()))
+    }
+
+    #[test]
+    fn dragging_the_handle_moves_the_split() {
+        for dir in [Direction::Horizontal, Direction::Vertical] {
+            let (before, after) = drag_by(dir, 60.0);
+            assert!(
+                (after - before - 60.0).abs() < 1.0,
+                "{dir:?}: {before} -> {after}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_split_respects_the_minimum() {
+        // The default split starts at half the span.
+        let (before, after) = drag_by(Direction::Horizontal, -1000.0);
+        let span = before * 2.0;
+        assert!(span.mul_add(-0.1, after).abs() < 0.5, "{after} of {span}");
+    }
+
+    #[test]
+    fn split_tiles_the_block() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 50.0));
+        let [a, d, b] = Direction::Vertical.split(rect, 20.0, 2.0);
+        assert_eq!(
+            (a.height(), d.top(), b.top(), b.height()),
+            (20.0, 20.0, 22.0, 28.0)
+        );
+        assert_eq!(a.width(), 100.0);
     }
 }

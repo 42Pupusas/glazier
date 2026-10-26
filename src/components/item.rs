@@ -72,7 +72,7 @@ impl Item {
     /// returned [`Response`] reports clicks. `id_salt` distinguishes sibling
     /// items so their interaction state doesn't collide.
     pub fn interactive(mut self, id_salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.interactive = Some(egui::Id::new(id_salt));
+        self.interactive = Some(egui::Id::unique(id_salt));
         self
     }
 
@@ -82,36 +82,8 @@ impl Item {
     /// path.
     pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> Response {
         let tokens = Tokens::get(ui);
-
-        // An interactive item must know its hover state *before* it paints the
-        // fill, but the rect isn't known until the content lays out. Reserve a
-        // paint slot up front, draw the content, then back-fill the surface once
-        // hover is resolved. (egui paints eagerly, so this is the only ordering
-        // that works.)
         if let Some(id_salt) = self.interactive {
-            let bg = ui.painter().add(egui::Shape::Noop);
-            let inner = Frame::new().inner_margin(14.0).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                content(ui)
-            });
-            let rect = inner.response.rect;
-            let response = ui.interact(rect, ui.id().with(id_salt), Sense::click());
-            // `bg-muted/50` at rest → full `bg-muted` on hover (shadcn
-            // `[a]:hover:bg-muted`), eased with `transition-colors`.
-            let hover_t = ui.ctx().animate_bool_with_time(
-                response.id.with("hover"),
-                response.hovered(),
-                0.15,
-            );
-            let fill = tokens
-                .muted
-                .gamma_multiply(0.5)
-                .lerp_to_gamma(tokens.muted, hover_t);
-            ui.painter().set(
-                bg,
-                egui::Shape::rect_filled(rect, tokens.radius_2xl(), fill),
-            );
-            return response.on_hover_cursor(egui::CursorIcon::PointingHand);
+            return Self::show_interactive(ui, tokens, id_salt, content);
         }
 
         let (fill, stroke) = match self.variant {
@@ -135,11 +107,79 @@ impl Item {
             })
             .response
     }
+
+    /// The link-style row.
+    ///
+    /// It must know its hover state before painting the fill, but the rect
+    /// is only known once the content lays out. So it reserves a paint slot,
+    /// draws the content, then back-fills the surface once hover is resolved.
+    fn show_interactive<R>(
+        ui: &mut Ui,
+        tokens: Tokens,
+        id_salt: egui::Id,
+        content: impl FnOnce(&mut Ui) -> R,
+    ) -> Response {
+        let bg = ui.painter().add(egui::Shape::Noop);
+        let inner = Frame::new().inner_margin(14.0).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            content(ui)
+        });
+        let rect = inner.response.rect;
+        let response = ui.interact(rect, ui.scope_id().with(id_salt), Sense::click());
+        // `bg-muted/50` at rest → full `bg-muted` on hover (shadcn
+        // `[a]:hover:bg-muted`), eased with `transition-colors`.
+        let hover_t =
+            ui.ctx()
+                .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
+        let fill = tokens
+            .muted
+            .gamma_multiply(0.5)
+            .lerp_to_gamma(tokens.muted, hover_t);
+        ui.painter().set(
+            bg,
+            egui::Shape::rect_filled(rect, tokens.radius_2xl(), fill),
+        );
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
 }
 
 impl Widget for Item {
     /// Renders an empty padded surface. Use [`Item::show`] for content.
     fn ui(self, ui: &mut Ui) -> Response {
         self.show(ui, |_| {})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    #[test]
+    fn each_variant_wraps_its_content() {
+        let mut rects = Vec::new();
+        TestUi::new().frame(|ui| {
+            for v in [Variant::Default, Variant::Outline, Variant::Muted] {
+                rects.push(Item::new().variant(v).show(ui, |ui| ui.label("row")).rect);
+            }
+            rects.push(ui.add(Item::default()).rect);
+        });
+        assert!(rects[..3].iter().all(|r| r.height() > 28.0));
+    }
+
+    #[test]
+    fn an_interactive_item_reports_clicks() {
+        let ui = TestUi::new();
+        let mut clicks = 0;
+        let mut build = |ui: &mut Ui| {
+            let r = Item::new()
+                .interactive("link")
+                .show(ui, |ui| ui.label("Open"));
+            clicks += usize::from(r.clicked());
+        };
+        let out = ui.frame(&mut build);
+        ui.click(TestUi::text_rect(&out, "Open").center(), &mut build);
+        drop(build);
+        assert_eq!(clicks, 1);
     }
 }

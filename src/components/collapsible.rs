@@ -67,13 +67,13 @@ impl Collapsible {
     /// Create a collapsible identified by `id_source` (used to persist its
     /// open/closed state across frames).
     ///
-    /// The id is stored as-is (`egui::Id::new(id_source)`) — **not** mixed
+    /// The id is stored as-is (`egui::Id::unique(id_source)`) — **not** mixed
     /// with the parent Ui's id-stack — so it is stable and readable from
     /// outside the widget via [`Collapsible::openness`] and
     /// [`Collapsible::is_open`].
     pub fn new(id_source: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
-            id_source: egui::Id::new(id_source),
+            id_source: egui::Id::unique(id_source),
             title: String::new(),
             icon: None,
             default_open: false,
@@ -87,14 +87,14 @@ impl Collapsible {
     /// Useful for sizing a parent container to match the collapsible's
     /// animated height before the collapsible itself is placed.
     pub fn openness(ctx: &egui::Context, id_source: impl std::hash::Hash + std::fmt::Debug) -> f32 {
-        let id = egui::Id::new(id_source);
+        let id = egui::Id::unique(id_source);
         CollapsingState::load_with_default_open(ctx, id, false).openness(ctx)
     }
 
     /// Return whether the collapsible with the given `id_source` is toggled
     /// open (independent of any in-progress animation).
     pub fn is_open(ctx: &egui::Context, id_source: impl std::hash::Hash + std::fmt::Debug) -> bool {
-        let id = egui::Id::new(id_source);
+        let id = egui::Id::unique(id_source);
         CollapsingState::load_with_default_open(ctx, id, false).is_open()
     }
 

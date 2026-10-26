@@ -143,7 +143,7 @@ impl Sheet {
         open: &mut bool,
         content: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
-        let id = egui::Id::new("glazier-sheet").with(&self.title);
+        let id = egui::Id::unique("glazier-sheet").with(&self.title);
         let style_hook = std::mem::take(&mut self.style_hook);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let size = self.size.unwrap_or(m.default_size);

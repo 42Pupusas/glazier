@@ -102,17 +102,14 @@ impl Variant {
         matches!(self, Self::Lead | Self::Muted)
     }
 
-    /// Whether this style renders bold (vs semibold / regular).
-    const fn is_bold(self) -> bool {
-        matches!(self, Self::H1)
-    }
-
-    /// Whether this style renders with the semibold face.
-    const fn is_semibold(self) -> bool {
-        matches!(
-            self,
-            Self::H2 | Self::H3 | Self::H4 | Self::Large | Self::Small
-        )
+    /// The face at `size`: bold for `h1`, semibold for the other headings and
+    /// emphasised lines, regular otherwise.
+    fn font(self, ui: &Ui, size: f32) -> egui::FontId {
+        match self {
+            Self::H1 => fonts::bold(ui, size),
+            Self::H2 | Self::H3 | Self::H4 | Self::Large | Self::Small => fonts::semibold(ui, size),
+            _ => egui::FontId::proportional(size),
+        }
     }
 }
 
@@ -228,123 +225,189 @@ impl Widget for Typography {
             }
         });
 
+        let prose = Prose {
+            size,
+            color,
+            tokens,
+            m,
+        };
         match variant {
-            Variant::Blockquote => blockquote(ui, &self.text, size, color, tokens, m),
-            Variant::InlineCode => inline_code(ui, self.text, tokens),
-            Variant::List => bulleted_list(ui, &self.items, size, color, m),
-            _ => {
-                let font = if variant.is_bold() {
-                    fonts::bold(ui, size)
-                } else if variant.is_semibold() {
-                    fonts::semibold(ui, size)
-                } else {
-                    egui::FontId::proportional(size)
-                };
-                let mut text = RichText::new(self.text).color(color).font(font);
-                if variant == Variant::H1 {
-                    text = text.strong();
-                }
-                let resp = ui.add(egui::Label::new(text).wrap());
-                // `h2` carries a bottom hairline (shadcn `border-b pb-2`).
-                if variant == Variant::H2 {
-                    ui.add_space(m.h2_rule_gap);
-                    let y = ui.cursor().top();
-                    ui.painter()
-                        .hline(ui.max_rect().x_range(), y, Stroke::new(1.0, tokens.border));
-                }
-                resp
-            }
+            Variant::Blockquote => prose.blockquote(ui, &self.text),
+            Variant::InlineCode => prose.inline_code(ui, self.text),
+            Variant::List => prose.list(ui, &self.items),
+            _ => prose.text(ui, variant, self.text),
         }
     }
 }
 
-/// Render a `blockquote`: an italic line inset behind a 2px left border.
-fn blockquote(
-    ui: &mut Ui,
-    text: &str,
+/// The resolved size, colour, and tokens one [`Typography`] renders with.
+struct Prose {
     size: f32,
     color: egui::Color32,
     tokens: Tokens,
     m: TypographyMetrics,
-) -> Response {
-    let border_w = m.blockquote_border_w;
-    let pad_l = m.blockquote_pad_l;
-
-    ui.horizontal(|ui| {
-        let avail = ui.available_width();
-        let job = egui::text::LayoutJob::simple(
-            text.to_owned(),
-            egui::FontId::proportional(size),
-            color,
-            (avail - border_w - pad_l).max(0.0),
-        );
-        let galley = ui.painter().layout_job(job);
-        let height = galley.size().y;
-
-        // Left border rule, full height of the wrapped quote.
-        let (border_rect, _) =
-            ui.allocate_exact_size(Vec2::new(border_w, height), egui::Sense::hover());
-        ui.painter().rect_filled(border_rect, 0.0, tokens.border);
-        ui.add_space(pad_l - border_w);
-
-        ui.add(egui::Label::new(RichText::new(text).color(color).italics().size(size)).wrap())
-    })
-    .inner
 }
 
-/// Render a disc-bulleted list: each item on its own row, hanging indent under
-/// a `•` bullet (shadcn `list-disc`).
-fn bulleted_list(
-    ui: &mut Ui,
-    items: &[String],
-    size: f32,
-    color: egui::Color32,
-    m: TypographyMetrics,
-) -> Response {
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 6.0; // shadcn `[&>li]:mt-2`
-        for item in items {
-            ui.horizontal_top(|ui| {
-                ui.add_space(8.0); // `ml-6` inset
-                ui.label(RichText::new("\u{2022}").color(color).size(size));
-                let text_w = (ui.available_width() - m.list_bullet_col).max(0.0);
-                ui.allocate_ui_with_layout(
-                    Vec2::new(text_w, 0.0),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new(item).color(color).size(size)).wrap(),
-                        );
-                    },
-                );
-            });
+impl Prose {
+    /// A heading or paragraph; `h2` carries a bottom hairline (shadcn
+    /// `border-b pb-2`).
+    fn text(&self, ui: &mut Ui, variant: Variant, text: String) -> Response {
+        let mut rich = RichText::new(text)
+            .color(self.color)
+            .font(variant.font(ui, self.size));
+        if variant == Variant::H1 {
+            rich = rich.strong();
         }
-    })
-    .response
-}
-
-/// Render `inline code`: a semibold mono run on a muted, hairline-bordered chip.
-fn inline_code(ui: &mut Ui, text: String, tokens: Tokens) -> Response {
-    use egui::{Sense, StrokeKind};
-
-    let padding = Vec2::new(6.0, 2.0);
-    let font = egui::FontId::new(13.0, fonts::semibold(ui, 13.0).family);
-    let galley = ui.painter().layout_no_wrap(text, font, tokens.foreground);
-    let size = galley.size() + padding * 2.0;
-    let (rect, response) = ui.allocate_at_least(size, Sense::hover());
-
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        painter.rect(
-            rect,
-            tokens.radius_sm(),
-            tokens.muted,
-            Stroke::new(1.0, tokens.border),
-            StrokeKind::Inside,
-        );
-        let pos = rect.center() - galley.size() / 2.0;
-        painter.galley(pos, galley, tokens.foreground);
+        let resp = ui.add(egui::Label::new(rich).wrap());
+        if variant == Variant::H2 {
+            ui.add_space(self.m.h2_rule_gap);
+            let y = ui.cursor().top();
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                y,
+                Stroke::new(1.0, self.tokens.border),
+            );
+        }
+        resp
     }
 
-    response
+    /// An italic quote inset behind a left border as tall as the wrapped text.
+    fn blockquote(&self, ui: &mut Ui, text: &str) -> Response {
+        let border_w = self.m.blockquote_border_w;
+        let pad_l = self.m.blockquote_pad_l;
+        ui.horizontal(|ui| {
+            let job = egui::text::LayoutJob::simple(
+                text.to_owned(),
+                egui::FontId::proportional(self.size),
+                self.color,
+                (ui.available_width() - border_w - pad_l).max(0.0),
+            );
+            let height = ui.painter().layout_job(job).size().y;
+            let (border, _) =
+                ui.allocate_exact_size(Vec2::new(border_w, height), egui::Sense::hover());
+            ui.painter().rect_filled(border, 0.0, self.tokens.border);
+            ui.add_space(pad_l - border_w);
+            let rich = RichText::new(text)
+                .color(self.color)
+                .italics()
+                .size(self.size);
+            ui.add(egui::Label::new(rich).wrap())
+        })
+        .inner
+    }
+
+    /// One row per item, hanging-indented under a `•` bullet (shadcn
+    /// `list-disc`).
+    fn list(&self, ui: &mut Ui, items: &[String]) -> Response {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 6.0; // shadcn `[&>li]:mt-2`
+            for item in items {
+                ui.horizontal_top(|ui| {
+                    ui.add_space(8.0); // `ml-6` inset
+                    ui.label(RichText::new("\u{2022}").color(self.color).size(self.size));
+                    let text_w = (ui.available_width() - self.m.list_bullet_col).max(0.0);
+                    let rich = RichText::new(item).color(self.color).size(self.size);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(text_w, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| ui.add(egui::Label::new(rich).wrap()),
+                    );
+                });
+            }
+        })
+        .response
+    }
+
+    /// A semibold mono run on a muted, hairline-bordered chip.
+    fn inline_code(&self, ui: &mut Ui, text: String) -> Response {
+        let tokens = self.tokens;
+        let padding = Vec2::new(6.0, 2.0);
+        let font = egui::FontId::new(13.0, fonts::semibold(ui, 13.0).family);
+        let galley = ui.painter().layout_no_wrap(text, font, tokens.foreground);
+        let size = galley.size() + padding * 2.0;
+        let (rect, response) = ui.allocate_at_least(size, egui::Sense::hover());
+        if ui.is_rect_visible(rect) {
+            ui.painter().rect(
+                rect,
+                tokens.radius_sm(),
+                tokens.muted,
+                Stroke::new(1.0, tokens.border),
+                egui::StrokeKind::Inside,
+            );
+            let pos = rect.center() - galley.size() / 2.0;
+            ui.painter().galley(pos, galley, tokens.foreground);
+        }
+        response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    const ALL: [Variant; 12] = [
+        Variant::H1,
+        Variant::H2,
+        Variant::H3,
+        Variant::H4,
+        Variant::P,
+        Variant::Lead,
+        Variant::Large,
+        Variant::Small,
+        Variant::Muted,
+        Variant::Blockquote,
+        Variant::InlineCode,
+        Variant::List,
+    ];
+
+    /// Every variant renders its text; headings outsize body text.
+    #[test]
+    fn every_variant_renders() {
+        let ui = TestUi::new();
+        let mut heights = Vec::new();
+        let out = ui.frame(|ui| {
+            for v in ALL {
+                let t = if v == Variant::List {
+                    Typography::list([format!("{v:?}")])
+                } else {
+                    Typography::new(format!("{v:?}"), v)
+                };
+                heights.push(ui.add(t).rect.height());
+            }
+            ui.add(Typography::h3("tiny").size(9.0).color(egui::Color32::RED));
+        });
+        for v in ALL {
+            assert!(TestUi::text_rect(&out, &format!("{v:?}")).height() > 0.0);
+        }
+        assert!(heights[0] > heights[4], "{heights:?}");
+        assert!(TestUi::text_rect(&out, "tiny").height() < TestUi::text_rect(&out, "H3").height());
+    }
+
+    /// Sizes follow shadcn's text scale.
+    #[test]
+    fn sizes_follow_the_scale() {
+        let sizes: Vec<f32> = ALL.iter().map(|v| v.size()).collect();
+        assert_eq!(
+            sizes,
+            [36.0, 30.0, 24.0, 20.0, 16.0, 20.0, 18.0, 14.0, 14.0, 16.0, 14.0, 16.0]
+        );
+    }
+
+    /// Shorthands pick their variants.
+    #[test]
+    fn shorthands_pick_variants() {
+        let pairs = [
+            (Typography::h1("").variant, Variant::H1),
+            (Typography::h2("").variant, Variant::H2),
+            (Typography::h4("").variant, Variant::H4),
+            (
+                Typography::p("").variant(Variant::Muted).variant,
+                Variant::Muted,
+            ),
+        ];
+        for (got, want) in pairs {
+            assert_eq!(got, want);
+        }
+    }
 }

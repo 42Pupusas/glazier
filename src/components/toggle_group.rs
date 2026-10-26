@@ -7,9 +7,11 @@
 //! and [`multiple`](ToggleGroup::multiple) (a set of pressed indices).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
-use egui::{CornerRadius, Response, Sense, Stroke, Ui, Vec2, Widget};
+use egui::{Galley, Rect, Response, Sense, Stroke, Ui, Vec2, Widget};
 
+use super::segments::Segments;
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
 
@@ -42,6 +44,28 @@ enum Selection<'a> {
     Single(&'a mut usize),
     /// Any subset of indices.
     Multiple(&'a mut BTreeSet<usize>),
+}
+
+impl Selection<'_> {
+    fn is_on(&self, i: usize) -> bool {
+        match self {
+            Self::Single(sel) => **sel == i,
+            Self::Multiple(set) => set.contains(&i),
+        }
+    }
+
+    /// Flip segment `i`. A single selection clears when its own item is
+    /// clicked again.
+    fn toggle(&mut self, i: usize) {
+        match self {
+            Self::Single(sel) => **sel = if **sel == i { usize::MAX } else { i },
+            Self::Multiple(set) => {
+                if !set.remove(&i) {
+                    set.insert(i);
+                }
+            }
+        }
+    }
 }
 
 /// A segmented group of mutually-joined toggles.
@@ -98,21 +122,39 @@ impl<'a> ToggleGroup<'a> {
 
 impl Widget for ToggleGroup<'_> {
     fn ui(mut self, ui: &mut Ui) -> Response {
-        let tokens = Tokens::get(ui);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
-        let ToggleGroup {
-            selection, options, ..
-        } = self;
+        let row = Row::new(ui, &self.options, m);
+        let (rect, response) = ui.allocate_at_least(row.size(), Sense::hover());
+        // The layout may stretch `rect` wider than the segments need (e.g. in a
+        // column); pin geometry to the intrinsic size so the group hugs its
+        // content and stays left-aligned instead of covering the row.
+        let bounds = Rect::from_min_size(rect.left_top(), row.size());
+        let clicked = ui
+            .is_rect_visible(bounds)
+            .then(|| row.show(ui, bounds, &response, &self.selection))
+            .flatten();
+        if let Some(i) = clicked {
+            self.selection.toggle(i);
+        }
+        response
+    }
+}
 
-        // Measure each segment so the row width is known up front. Lay the text
-        // out with `PLACEHOLDER` as its colour so the per-segment `text_col`
-        // passed to `painter.galley` below actually applies — a galley laid out
-        // with an explicit colour ignores the paint-time override, which is what
-        // left selected segments rendering `foreground` (black on the black
-        // `primary` chip in light mode).
-        //
-        // Use semibold 14 px to match `ButtonGroup`'s `font-medium` weight —
-        // `TextStyle::Button` resolves to the regular face and looks lighter.
+/// One frame of the group: its laid-out labels and their widths.
+struct Row {
+    tokens: Tokens,
+    m: ToggleGroupMetrics,
+    galleys: Vec<Arc<Galley>>,
+    widths: Vec<f32>,
+}
+
+impl Row {
+    fn new(ui: &Ui, options: &[String], m: ToggleGroupMetrics) -> Self {
+        // Laid out with `PLACEHOLDER` so the per-segment text colour passed to
+        // `painter.galley` applies; a galley laid out with an explicit colour
+        // ignores the paint-time override (which left selected labels black on
+        // the black `primary` chip in light mode). Semibold 14 px matches
+        // `ButtonGroup`'s `font-medium`.
         let font = crate::fonts::semibold(ui, 14.0);
         let galleys: Vec<_> = options
             .iter()
@@ -121,130 +163,131 @@ impl Widget for ToggleGroup<'_> {
                     .layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER)
             })
             .collect();
-        let widths: Vec<f32> = galleys
+        let widths = galleys
             .iter()
             .map(|g| m.pad_x.mul_add(2.0, g.size().x))
             .collect();
-        let total_w: f32 = widths.iter().sum();
+        Self {
+            tokens: Tokens::get(ui),
+            m,
+            galleys,
+            widths,
+        }
+    }
 
-        let (rect, response) = ui.allocate_at_least(Vec2::new(total_w, m.height), Sense::hover());
-        // The layout may stretch `rect` wider than the segments need (e.g. in a
-        // column); pin all geometry to the intrinsic `total_w` so the group
-        // hugs its content and stays left-aligned instead of covering the row.
-        let bounds = egui::Rect::from_min_size(rect.left_top(), Vec2::new(total_w, m.height));
-        // Use the same large radius as `ButtonGroup` so both widget families
-        // read as visually consistent pill-shaped controls.
-        let radius = tokens.radius_2xl();
+    fn size(&self) -> Vec2 {
+        Vec2::new(self.widths.iter().sum(), self.m.height)
+    }
 
-        let is_on = |i: usize| match &selection {
-            Selection::Single(sel) => **sel == i,
-            Selection::Multiple(set) => set.contains(&i),
-        };
+    /// Paint the border and every segment. Returns the clicked segment.
+    fn show(
+        &self,
+        ui: &Ui,
+        bounds: Rect,
+        response: &Response,
+        selection: &Selection<'_>,
+    ) -> Option<usize> {
+        // `ButtonGroup`'s radius, so both families read as the same pill.
+        let radius = self.tokens.radius_2xl();
+        ui.painter().rect_stroke(
+            bounds,
+            radius,
+            Stroke::new(1.0, self.tokens.border),
+            egui::StrokeKind::Inside,
+        );
+        let mut x = bounds.left();
+        let mut clicked = None;
+        for (i, w) in self.widths.iter().enumerate() {
+            let seg =
+                Rect::from_min_size(egui::pos2(x, bounds.top()), Vec2::new(*w, self.m.height));
+            if self.segment(ui, i, seg, response, selection.is_on(i)) {
+                clicked = Some(i);
+            }
+            x += w;
+        }
+        clicked
+    }
 
-        // Hit-test + paint each segment.
-        let mut clicked: Option<usize> = None;
-        if ui.is_rect_visible(bounds) {
-            let painter = ui.painter();
-            // Outer container border.
-            painter.rect_stroke(
-                bounds,
-                radius,
+    /// Hit-test and paint segment `i`. Returns `true` when clicked.
+    fn segment(&self, ui: &Ui, i: usize, seg: Rect, response: &Response, selected: bool) -> bool {
+        let (tokens, time) = (self.tokens, self.m.toggle_time);
+        let seg_resp = ui.interact(seg, response.id.with(i), Sense::click());
+        let ctx = ui.ctx();
+        let hover_t =
+            ctx.animate_bool_with_time(response.id.with(("hover", i)), seg_resp.hovered(), time);
+        // Selection fades from the segment's own unselected look (the opaque
+        // `widget` surface plus any hover `accent`) straight to `primary`: one
+        // solid-to-solid lerp, so there is no neutral midpoint to stall on.
+        let on_t = ctx.animate_bool_with_time(response.id.with(("on", i)), selected, time);
+        if on_t > 0.01 || hover_t > 0.01 {
+            let fill = tokens
+                .widget
+                .lerp_to_gamma(tokens.accent, hover_t)
+                .lerp_to_gamma(tokens.primary, on_t);
+            // Inset 1px with outer corners rounded so the fill never pokes past
+            // the container's rounded border.
+            let row = Segments {
+                count: self.widths.len(),
+            };
+            let cr = row.radius(i, tokens.radius_2xl().saturating_sub(1));
+            ui.painter().rect_filled(seg.shrink(1.0), cr, fill);
+        }
+        if i > 0 {
+            ui.painter().vline(
+                seg.left(),
+                seg.top()..=seg.bottom(),
                 Stroke::new(1.0, tokens.border),
-                egui::StrokeKind::Inside,
             );
-
-            let mut x = bounds.left();
-            for (i, w) in widths.iter().enumerate() {
-                let seg =
-                    egui::Rect::from_min_size(egui::pos2(x, bounds.top()), Vec2::new(*w, m.height));
-                let seg_resp = ui.interact(seg, response.id.with(i), Sense::click());
-                if seg_resp.clicked() {
-                    clicked = Some(i);
-                }
-
-                let hover_t = ui.ctx().animate_bool_with_time(
-                    response.id.with(("hover", i)),
-                    seg_resp.hovered(),
-                    m.toggle_time,
-                );
-                // Selection eases in/out via its own time-based 0→1 (`on_t`)
-                // so the `primary` chip fades between segments instead of
-                // snapping. We blend *from the segment's own unselected look*
-                // (the opaque `widget` surface, plus any hover `accent` lift)
-                // straight to `primary` — a single solid→solid lerp that
-                // always completes, so there's no neutral midpoint to get
-                // stuck on. `widget`, not `background`, since the latter is
-                // the app-canvas token and may be translucent under a user
-                // theme.
-                let selected = is_on(i);
-                let on_t = ui.ctx().animate_bool_with_time(
-                    response.id.with(("on", i)),
-                    selected,
-                    m.toggle_time,
-                );
-                let base = tokens.widget.lerp_to_gamma(tokens.accent, hover_t);
-                let fill = base.lerp_to_gamma(tokens.primary, on_t);
-                if on_t > 0.01 || hover_t > 0.01 {
-                    // Round the outer corners so the fill never pokes past the
-                    // container's rounded border; inset by 1px to sit inside it.
-                    let fill_rect = seg.shrink(1.0);
-                    let cr = segment_radius(i, widths.len(), radius.saturating_sub(1));
-                    painter.rect_filled(fill_rect, cr, fill);
-                }
-
-                // Divider before every segment except the first.
-                if i > 0 {
-                    painter.vline(
-                        x,
-                        bounds.top()..=bounds.bottom(),
-                        Stroke::new(1.0, tokens.border),
-                    );
-                }
-
-                let g = &galleys[i];
-                // Label fades from normal foreground to primary-foreground in
-                // lockstep with the chip.
-                let text_col = tokens
-                    .foreground
-                    .lerp_to_gamma(tokens.primary_foreground, on_t);
-                let pos = egui::pos2(
-                    seg.center().x - g.size().x / 2.0,
-                    seg.center().y - g.size().y / 2.0,
-                );
-                painter.galley(pos, g.clone(), text_col);
-
-                x += w;
-            }
         }
-
-        if let Some(i) = clicked {
-            match selection {
-                Selection::Single(sel) => {
-                    *sel = if *sel == i { usize::MAX } else { i };
-                }
-                Selection::Multiple(set) => {
-                    if !set.remove(&i) {
-                        set.insert(i);
-                    }
-                }
-            }
-        }
-
-        response
+        // The label fades to `primary_foreground` in step with the chip.
+        let text_col = tokens
+            .foreground
+            .lerp_to_gamma(tokens.primary_foreground, on_t);
+        let g = &self.galleys[i];
+        ui.painter()
+            .galley(seg.center() - g.size() / 2.0, g.clone(), text_col);
+        seg_resp.clicked()
     }
 }
 
-/// Round only the outer corners of segment `i` of `n`: the first segment rounds
-/// its left side, the last its right side, interior segments stay square — so a
-/// selected end segment's fill follows the container's rounded border instead of
-/// poking past it.
-const fn segment_radius(i: usize, n: usize, r: u8) -> CornerRadius {
-    let first = i == 0;
-    let last = i + 1 == n;
-    CornerRadius {
-        nw: if first { r } else { 0 },
-        sw: if first { r } else { 0 },
-        ne: if last { r } else { 0 },
-        se: if last { r } else { 0 },
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    const OPTIONS: [&str; 3] = ["Left", "Center", "Right"];
+
+    /// Click the label `text` once the group has been drawn.
+    fn click(ui: &TestUi, text: &str, mut build: impl FnMut(&mut Ui)) {
+        let out = ui.frame(&mut build);
+        ui.click(TestUi::text_rect(&out, text).center(), &mut build);
+    }
+
+    #[test]
+    fn single_selects_and_reclick_clears() {
+        let ui = TestUi::new();
+        let mut selected = 0;
+        click(&ui, "Right", |ui| {
+            ToggleGroup::single(&mut selected, OPTIONS).ui(ui);
+        });
+        assert_eq!(selected, 2);
+        click(&ui, "Right", |ui| {
+            ToggleGroup::single(&mut selected, OPTIONS).ui(ui);
+        });
+        assert_eq!(selected, usize::MAX);
+    }
+
+    #[test]
+    fn multiple_toggles_membership() {
+        let ui = TestUi::new();
+        let mut set = BTreeSet::from([0]);
+        click(&ui, "Center", |ui| {
+            ToggleGroup::multiple(&mut set, OPTIONS).ui(ui);
+        });
+        assert_eq!(set, BTreeSet::from([0, 1]));
+        click(&ui, "Left", |ui| {
+            ToggleGroup::multiple(&mut set, OPTIONS).ui(ui);
+        });
+        assert_eq!(set, BTreeSet::from([1]));
     }
 }

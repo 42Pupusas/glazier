@@ -135,24 +135,34 @@ impl Sizeable<BadgeMetrics> for Badge {
     }
 }
 
-impl Widget for Badge {
-    fn ui(self, ui: &mut Ui) -> Response {
-        let tokens = Tokens::get(ui);
-        let (fill, stroke, text) = match self.variant {
-            Variant::Default => (tokens.primary, Stroke::NONE, tokens.primary_foreground),
-            Variant::Secondary => (tokens.secondary, Stroke::NONE, tokens.secondary_foreground),
-            Variant::Destructive => (
+impl Variant {
+    /// The variant's default paint.
+    const fn style(self, tokens: Tokens) -> BadgeStyle {
+        let (fill, stroke, text) = match self {
+            Self::Default => (tokens.primary, Stroke::NONE, tokens.primary_foreground),
+            Self::Secondary => (tokens.secondary, Stroke::NONE, tokens.secondary_foreground),
+            Self::Destructive => (
                 tokens.destructive,
                 Stroke::NONE,
                 tokens.destructive_foreground,
             ),
-            Variant::Outline => (
+            Self::Outline => (
                 Color32::TRANSPARENT,
-                Stroke::new(1.0, tokens.border),
+                Stroke {
+                    width: 1.0,
+                    color: tokens.border,
+                },
                 tokens.foreground,
             ),
         };
-        let mut style = BadgeStyle { fill, stroke, text };
+        BadgeStyle { fill, stroke, text }
+    }
+}
+
+impl Widget for Badge {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let tokens = Tokens::get(ui);
+        let mut style = self.variant.style(tokens);
         self.style_hook.apply(&mut style);
         let BadgeStyle {
             fill,
@@ -175,60 +185,92 @@ impl Widget for Badge {
         let size = Vec2::new(lead + trail, 0.0) + galley.size() + padding * 2.0;
         let (rect, response) = ui.allocate_at_least(size, Sense::hover());
 
-        if ui.is_rect_visible(rect) {
-            // shadcn badge is `rounded-full`: a full pill, radius = half height.
-            let radius = rect.height() / 2.0;
-            ui.painter()
-                .rect(rect, radius, fill, stroke, StrokeKind::Inside);
-            let mut cursor = rect.left() + padding.x;
-            if let Some(dot) = self.dot {
-                let center = egui::pos2(cursor + m.dot / 2.0, rect.center().y);
-                ui.painter().circle_filled(center, m.dot / 2.0, dot);
-                cursor += m.dot + m.dot_gap;
-            }
-            if let Some(icon) = self.icon_start {
-                paint_badge_icon(
-                    ui,
-                    icon,
-                    text_color,
-                    cursor,
-                    rect.center().y,
-                    tokens,
-                    m.icon,
-                );
-                cursor += m.icon + m.icon_gap;
-            }
-            let text_pos = egui::pos2(cursor, rect.center().y - galley.size().y / 2.0);
-            ui.painter().galley(text_pos, galley, text_color);
-            if let Some(icon) = self.icon_end {
-                let icon_x = rect.right() - padding.x - m.icon;
-                paint_badge_icon(
-                    ui,
-                    icon,
-                    text_color,
-                    icon_x,
-                    rect.center().y,
-                    tokens,
-                    m.icon,
-                );
-            }
+        if !ui.is_rect_visible(rect) {
+            return response;
         }
-
+        // shadcn badge is `rounded-full`: a full pill, radius = half height.
+        ui.painter()
+            .rect(rect, rect.height() / 2.0, fill, stroke, StrokeKind::Inside);
+        let cy = rect.center().y;
+        let icon = |icon: Icon, x: f32| {
+            let r =
+                egui::Rect::from_min_size(egui::pos2(x, cy - m.icon / 2.0), Vec2::splat(m.icon));
+            icon.size(m.icon)
+                .color(text_color)
+                .image(tokens)
+                .paint_at(ui, r);
+        };
+        let mut x = rect.left() + padding.x;
+        if let Some(dot) = self.dot {
+            ui.painter()
+                .circle_filled(egui::pos2(x + m.dot / 2.0, cy), m.dot / 2.0, dot);
+            x += m.dot + m.dot_gap;
+        }
+        if let Some(i) = self.icon_start {
+            icon(i, x);
+            x += m.icon + m.icon_gap;
+        }
+        let text_pos = egui::pos2(x, cy - galley.size().y / 2.0);
+        ui.painter().galley(text_pos, galley, text_color);
+        if let Some(i) = self.icon_end {
+            icon(i, rect.right() - padding.x - m.icon);
+        }
         response
     }
 }
 
-/// Paint a badge icon of edge length `size`, tinted to the badge's text
-/// colour, with its left edge at `x` and vertically centred on `cy`.
-fn paint_badge_icon(
-    ui: &Ui,
-    icon: Icon,
-    tint: Color32,
-    x: f32,
-    cy: f32,
-    tokens: Tokens,
-    size: f32,
-) {
-    let rect = egui::Rect::from_min_size(egui::pos2(x, cy - size / 2.0), Vec2::splat(size));
-    icon.size(size).color(tint).image(tokens).paint_at(ui, rect);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    const DOT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>"#;
+
+    /// Each decoration widens the badge; the label sits after the leading ones.
+    #[test]
+    fn decorations_widen_the_badge() {
+        let ui = TestUi::new();
+        let mut widths = Vec::new();
+        let out = ui.frame(|ui| {
+            for badge in [
+                Badge::new("New"),
+                Badge::new("New").dot(Color32::RED),
+                Badge::new("New")
+                    .dot(Color32::RED)
+                    .icon_start(Icon::new(DOT)),
+                Badge::new("New")
+                    .dot(Color32::RED)
+                    .icon_start(Icon::new(DOT))
+                    .icon_end(Icon::new(DOT)),
+            ] {
+                widths.push(ui.add(badge).rect.width());
+            }
+        });
+        assert!(widths.windows(2).all(|w| w[1] > w[0]), "{widths:?}");
+        assert!(TestUi::text_x(&out, "New") > 0.0);
+    }
+
+    /// The style hook overrides the variant's default paint.
+    #[test]
+    fn style_hook_overrides_the_variant() {
+        let tokens = Tokens::from_visuals(&egui::Visuals::light());
+        assert_eq!(Variant::Outline.style(tokens).fill, Color32::TRANSPARENT);
+        assert_eq!(Variant::Destructive.style(tokens).fill, tokens.destructive);
+        assert_eq!(
+            Variant::Secondary.style(tokens).text,
+            tokens.secondary_foreground
+        );
+        let out = TestUi::new().frame(|ui| {
+            ui.add(
+                Badge::new("Hot")
+                    .variant(Variant::Secondary)
+                    .style(|s: &mut BadgeStyle| s.fill = Color32::GOLD),
+            );
+        });
+        let gold = out.shapes.iter().any(|c| match &c.shape {
+            egui::Shape::Rect(r) => r.fill == Color32::GOLD,
+            _ => false,
+        });
+        assert!(gold);
+    }
 }

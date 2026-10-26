@@ -17,15 +17,10 @@
 
 use egui::{Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+use super::picker::{Mark, OptionRow, ValueLine};
 use crate::components::dropdown_menu::DropdownMenu;
-use crate::components::icon::Icon;
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
-
-/// `chevron-down` (lucide) — the trailing affordance.
-const CHEVRON_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
-/// `check` (lucide) — marks the active option in the popup.
-const CHECK: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>"#;
 
 /// Overridable geometry for [`Select`] — reach in via [`Select::sizing`].
 #[derive(Clone, Copy, Debug)]
@@ -177,76 +172,49 @@ impl<'a> Select<'a> {
                 StrokeKind::Inside,
             );
 
-            let pad_x = m.pad_x;
-            // Trailing chevron.
-            let chevron_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.right() - pad_x - 16.0, rect.center().y - 8.0),
-                Vec2::splat(16.0),
-            );
-            Icon::new(CHEVRON_DOWN)
-                .color(tokens.muted_foreground)
-                .image(tokens)
-                .paint_at(ui, chevron_rect);
-
-            // Leading value text: a single line, truncated with `…` (shadcn's
-            // `truncate`/`line-clamp-1`) so a long value never wraps or spills
-            // into the trailing chevron.
-            let color = if is_placeholder {
-                tokens.muted_foreground
-            } else {
-                tokens.foreground
-            };
-            let avail = (pad_x.mul_add(-2.0, rect.width()) - 22.0).max(0.0);
-            let mut job = egui::text::LayoutJob::simple(
-                value.to_owned(),
-                egui::FontId::proportional(m.text),
-                color,
-                avail,
-            );
-            job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
-            let galley = ui.painter().layout_job(job);
-            let pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y / 2.0);
-            ui.painter().galley(pos, galley, color);
+            // A single line, truncated with `…` (shadcn's `truncate`) so a
+            // long value never wraps or runs into the 16pt chevron.
+            ValueLine {
+                pad_x: m.pad_x,
+                text: m.text,
+                chevron: 16.0,
+                chevron_gap: 6.0,
+            }
+            .paint(ui, tokens, rect, value, is_placeholder);
         }
 
         // Option popover, hung off the trigger. `Popup::menu` toggles its own
         // open-state from the trigger's click — don't toggle it ourselves, and
         // don't override its id (the toggle is keyed to the default id).
-        let trigger_w = response.rect.width();
-        let groups = self.groups; // move out before the closure borrows selected
+        let list = OptionList {
+            row: OptionRow {
+                tokens,
+                width: response.rect.width(),
+                text: m.text,
+                pad_x: m.item_pad_x,
+                pad_y: m.item_pad_y,
+                min_h: m.item_min_h,
+                mark: Mark::Check(m.check_col),
+            },
+            m,
+            options: &self.options,
+        };
+        let groups = &self.groups;
+        let selected = &mut *self.selected;
         egui::Popup::menu(&response)
             .frame(DropdownMenu::frame(tokens))
             .gap(4.0)
             .show(|ui| {
-                ui.set_min_width(trigger_w);
+                ui.set_min_width(list.row.width);
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
-                if groups.is_empty() {
-                    // Flat list — original behaviour.
-                    for (i, option) in self.options.iter().enumerate() {
-                        if option_row(ui, tokens, trigger_w, option, i == *self.selected, m)
-                            .clicked()
-                        {
-                            *self.selected = i;
-                            ui.close();
-                        }
-                    }
+                let picked = if groups.is_empty() {
+                    list.rows(ui, 0..list.options.len(), *selected)
                 } else {
-                    // Grouped list: section header → option rows → separator.
-                    for (g_idx, (label, indices)) in groups.iter().enumerate() {
-                        if g_idx > 0 {
-                            group_separator_row(ui, tokens, trigger_w, m);
-                        }
-                        group_label_row(ui, tokens, trigger_w, label, m);
-                        for &opt_idx in indices {
-                            if let Some(option) = self.options.get(opt_idx) {
-                                let active = opt_idx == *self.selected;
-                                if option_row(ui, tokens, trigger_w, option, active, m).clicked() {
-                                    *self.selected = opt_idx;
-                                    ui.close();
-                                }
-                            }
-                        }
-                    }
+                    list.groups(ui, groups, *selected)
+                };
+                if let Some(i) = picked {
+                    *selected = i;
+                    ui.close();
                 }
             });
 
@@ -254,95 +222,137 @@ impl<'a> Select<'a> {
     }
 }
 
-/// A muted, xs-weight section label row — mirrors `DropdownMenuEntry::Label`.
-fn group_label_row(ui: &mut Ui, tokens: Tokens, width: f32, text: &str, m: SelectMetrics) {
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        egui::FontId::proportional(m.group_label_text),
-        tokens.muted_foreground,
-    );
-    // py-1 top + text height + a touch extra so it breathes.
-    let height = (galley.size().y + 10.0).max(20.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
-    if ui.is_rect_visible(rect) {
+/// The popup's option list.
+struct OptionList<'a> {
+    row: OptionRow,
+    m: SelectMetrics,
+    options: &'a [String],
+}
+
+impl OptionList<'_> {
+    /// Rows for the options at `indices`. Returns the clicked option.
+    fn rows(
+        &self,
+        ui: &mut Ui,
+        indices: impl IntoIterator<Item = usize>,
+        selected: usize,
+    ) -> Option<usize> {
+        let mut clicked = None;
+        for i in indices {
+            let Some(option) = self.options.get(i) else {
+                continue;
+            };
+            if self.row.show(ui, option, i == selected).clicked() {
+                clicked = Some(i);
+            }
+        }
+        clicked
+    }
+
+    /// Each group's heading and rows, separated by hairlines.
+    fn groups(
+        &self,
+        ui: &mut Ui,
+        groups: &[(String, Vec<usize>)],
+        selected: usize,
+    ) -> Option<usize> {
+        let mut clicked = None;
+        for (i, (label, indices)) in groups.iter().enumerate() {
+            if i > 0 {
+                self.separator(ui);
+            }
+            self.label(ui, label);
+            clicked = self.rows(ui, indices.iter().copied(), selected).or(clicked);
+        }
+        clicked
+    }
+
+    /// A muted, xs section label — mirrors `DropdownMenuEntry::Label`.
+    fn label(&self, ui: &mut Ui, text: &str) {
+        let tokens = self.row.tokens;
+        let galley = ui.painter().layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(self.m.group_label_text),
+            tokens.muted_foreground,
+        );
+        // py-1 plus a touch extra so it breathes.
+        let height = (galley.size().y + 10.0).max(20.0);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(self.row.width, height), Sense::hover());
         let pos = egui::pos2(
-            rect.left() + m.item_pad_x,
+            rect.left() + self.m.item_pad_x,
             rect.center().y - galley.size().y / 2.0,
         );
         ui.painter().galley(pos, galley, tokens.muted_foreground);
     }
-}
 
-/// A hairline separator between groups — bleeds to the popup frame edge.
-fn group_separator_row(ui: &mut Ui, tokens: Tokens, width: f32, m: SelectMetrics) {
-    // 9px tall (4px margin + 1px line + 4px margin), matching `DropdownMenu`.
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 9.0), egui::Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let y = rect.center().y.round();
+    /// A hairline between groups, 9pt tall like `DropdownMenu`'s, bleeding
+    /// to the popup frame's edge.
+    fn separator(&self, ui: &mut Ui) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(self.row.width, 9.0), Sense::hover());
+        let pad = self.m.popup_pad;
         ui.painter().hline(
-            (rect.left() - m.popup_pad)..=(rect.right() + m.popup_pad),
-            y,
-            egui::Stroke::new(1.0, tokens.border.gamma_multiply(0.5)),
+            (rect.left() - pad)..=(rect.right() + pad),
+            rect.center().y.round(),
+            Stroke::new(1.0, self.row.tokens.border.gamma_multiply(0.5)),
         );
     }
 }
 
-/// One option row: an accent-on-hover command with a leading check when active.
-fn option_row(
-    ui: &mut Ui,
-    tokens: Tokens,
-    width: f32,
-    text: &str,
-    active: bool,
-    m: SelectMetrics,
-) -> Response {
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        egui::FontId::proportional(m.text),
-        tokens.foreground,
-    );
-    let height = 2.0_f32
-        .mul_add(m.item_pad_y, galley.size().y)
-        .max(m.item_min_h);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
 
-    if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
-        if hovered {
-            ui.painter().rect(
-                rect,
-                tokens.radius_xl(),
-                tokens.accent,
-                Stroke::NONE,
-                StrokeKind::Inside,
-            );
-        }
-        let text_color = if hovered {
-            tokens.accent_foreground
-        } else {
-            tokens.foreground
+    /// Open the popup, then click `option`; returns the bound index.
+    fn pick(grouped: bool, option: &str) -> usize {
+        let ui = TestUi::new();
+        let mut selected = 0;
+        let mut build = |ui: &mut Ui| {
+            let s = Select::new(&mut selected, ["Checking", "Savings", "Brokerage"]).width(200.0);
+            let s = if grouped {
+                s.groups([("Banking", vec![0, 1, 7]), ("Investing", vec![2])])
+            } else {
+                s
+            };
+            s.show(ui);
         };
-        // Leading check column (drawn only when active).
-        if active {
-            let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + m.item_pad_x, rect.center().y - 8.0),
-                Vec2::splat(16.0),
-            );
-            Icon::new(CHECK)
-                .color(text_color)
-                .image(tokens)
-                .paint_at(ui, icon_rect);
+        let out = ui.frame(&mut build);
+        ui.click(TestUi::text_rect(&out, "Checking").center(), &mut build);
+        let out = ui.frame(&mut build);
+        if grouped {
+            assert!(TestUi::text_x(&out, "Investing") > 0.0);
         }
-        let galley = ui.painter().layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::proportional(m.text),
-            text_color,
-        );
-        let pos = egui::pos2(
-            rect.left() + m.item_pad_x + m.check_col,
-            rect.center().y - galley.size().y / 2.0,
-        );
-        ui.painter().galley(pos, galley, text_color);
+        // The popup repeats the value; the last painted copy is the option.
+        let pos = out
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.job.text == option => {
+                    Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+                }
+                _ => None,
+            })
+            .expect("option painted");
+        ui.click(pos, &mut build);
+        drop(build);
+        selected
     }
-    response
+
+    #[test]
+    fn picking_writes_the_index() {
+        assert_eq!(pick(false, "Savings"), 1);
+        assert_eq!(pick(true, "Brokerage"), 2);
+    }
+
+    #[test]
+    fn an_out_of_range_selection_shows_the_placeholder() {
+        let mut selected = 9;
+        let out = TestUi::new().frame(|ui| {
+            Select::new(&mut selected, ["A"])
+                .placeholder("Pick one")
+                .show(ui);
+        });
+        assert!(TestUi::text_x(&out, "Pick one") > 0.0);
+    }
 }

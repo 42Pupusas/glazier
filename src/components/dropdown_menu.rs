@@ -75,6 +75,17 @@ enum DropdownMenuEntry {
     Separator,
 }
 
+impl DropdownMenuEntry {
+    /// The entry's text and its size, or `None` for a separator.
+    fn text(&self, m: DropdownMenuMetrics) -> Option<(&str, f32)> {
+        match self {
+            Self::Label(text) => Some((text, m.label_text)),
+            Self::Item { text, .. } => Some((text, m.item_text)),
+            Self::Separator => None,
+        }
+    }
+}
+
 /// A menu content surface (shadcn's `DropdownMenuContent`).
 #[must_use = "menus do nothing unless you show them"]
 pub struct DropdownMenu {
@@ -174,16 +185,19 @@ impl DropdownMenu {
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         // Size to the widest row's intrinsic width (text + `px-2`), with a
         // `min-w-32` floor — never to the popup's available width.
-        let width = self.intrinsic_width(ui, m).max(m.min_width);
-
+        let rows = Rows {
+            tokens,
+            m,
+            width: self.intrinsic_width(ui).max(m.min_width),
+        };
         let mut clicked = None;
         let mut item_index = 0;
         for entry in &self.entries {
             match entry {
-                DropdownMenuEntry::Label(text) => label_row(ui, tokens, m, width, text),
-                DropdownMenuEntry::Separator => separator_row(ui, tokens, m, width),
+                DropdownMenuEntry::Label(text) => rows.label(ui, text),
+                DropdownMenuEntry::Separator => rows.separator(ui),
                 DropdownMenuEntry::Item { text, destructive } => {
-                    if item_row(ui, tokens, m, width, text, *destructive).clicked() {
+                    if rows.item(ui, text, *destructive).clicked() {
                         clicked = Some(item_index);
                     }
                     item_index += 1;
@@ -194,80 +208,82 @@ impl DropdownMenu {
     }
 
     /// Widest row width: each text run plus its horizontal padding (`px-2`).
-    fn intrinsic_width(&self, ui: &Ui, m: DropdownMenuMetrics) -> f32 {
-        let mut max = 0.0_f32;
-        for entry in &self.entries {
-            let (text, size) = match entry {
-                DropdownMenuEntry::Label(text) => (text, m.label_text),
-                DropdownMenuEntry::Item { text, .. } => (text, m.item_text),
-                DropdownMenuEntry::Separator => continue,
-            };
-            // Colour is irrelevant when measuring.
-            let galley = ui.painter().layout_no_wrap(
-                text.clone(),
-                egui::FontId::proportional(size),
-                egui::Color32::WHITE,
-            );
-            max = max.max(2.0_f32.mul_add(m.item_pad_x, galley.size().x));
-        }
-        max
+    fn intrinsic_width(&self, ui: &Ui) -> f32 {
+        let m = self.metrics;
+        self.entries
+            .iter()
+            .filter_map(|e| e.text(m))
+            .map(|(text, size)| {
+                // Colour is irrelevant when measuring.
+                let galley = ui.painter().layout_no_wrap(
+                    text.to_owned(),
+                    egui::FontId::proportional(size),
+                    egui::Color32::WHITE,
+                );
+                m.item_pad_x.mul_add(2.0, galley.size().x)
+            })
+            .fold(0.0, f32::max)
     }
 }
 
-/// A muted section label (`px-2 py-1 text-xs text-muted-foreground`).
-fn label_row(ui: &mut Ui, tokens: Tokens, m: DropdownMenuMetrics, width: f32, text: &str) {
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        egui::FontId::proportional(m.label_text),
-        tokens.muted_foreground,
-    );
-    let height = galley.size().y + 8.0; // py-1
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-    let pos = egui::pos2(
-        rect.left() + m.item_pad_x,
-        rect.center().y - galley.size().y / 2.0,
-    );
-    ui.painter().galley(pos, galley, tokens.muted_foreground);
-}
-
-/// A clickable command row with accent-on-hover and a destructive variant.
-fn item_row(
-    ui: &mut Ui,
+/// Paints a menu's rows at a shared width.
+struct Rows {
     tokens: Tokens,
     m: DropdownMenuMetrics,
     width: f32,
-    text: &str,
-    destructive: bool,
-) -> Response {
-    let base_text = if destructive {
-        tokens.destructive
-    } else {
-        tokens.foreground
-    };
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        egui::FontId::proportional(m.item_text),
-        base_text,
-    );
-    let height = 2.0_f32
-        .mul_add(m.item_pad_y, galley.size().y)
-        .max(m.item_min_h);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+}
 
-    if ui.is_rect_visible(rect) {
-        // `focus:bg-accent` (default) / `focus:bg-destructive/10` (destructive),
-        // eased so the highlight glides in/out with `transition-colors`.
+impl Rows {
+    /// A muted section label (`px-2 py-1 text-xs text-muted-foreground`).
+    fn label(&self, ui: &mut Ui, text: &str) {
+        let color = self.tokens.muted_foreground;
+        let galley = ui.painter().layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(self.m.label_text),
+            color,
+        );
+        let height = galley.size().y + 8.0; // py-1
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(self.width, height), Sense::hover());
+        self.text_at(ui, rect, galley, color);
+    }
+
+    /// A clickable command, accent on hover, or in the destructive palette.
+    fn item(&self, ui: &mut Ui, text: &str, destructive: bool) -> Response {
+        let (tokens, m) = (self.tokens, self.m);
+        let font = egui::FontId::proportional(m.item_text);
+        let measured =
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), tokens.foreground);
+        let height = m
+            .item_pad_y
+            .mul_add(2.0, measured.size().y)
+            .max(m.item_min_h);
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(self.width, height), Sense::click());
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
+        // `focus:bg-accent` / `focus:bg-destructive/10`, eased like
+        // `transition-colors`.
         let hover_t = ui.ctx().animate_bool_with_time(
             response.id.with("hover"),
             response.hovered(),
             m.hover_time,
         );
+        let (fill, color) = if destructive {
+            (
+                tokens.destructive.gamma_multiply(0.10 * hover_t),
+                tokens.destructive,
+            )
+        } else {
+            (
+                tokens.accent.gamma_multiply(hover_t),
+                tokens
+                    .foreground
+                    .lerp_to_gamma(tokens.accent_foreground, hover_t),
+            )
+        };
         if hover_t > 0.01 {
-            let fill = if destructive {
-                tokens.destructive.gamma_multiply(0.10 * hover_t)
-            } else {
-                tokens.accent.gamma_multiply(hover_t)
-            };
             ui.painter().rect(
                 rect,
                 tokens.radius_xl(),
@@ -276,35 +292,89 @@ fn item_row(
                 StrokeKind::Inside,
             );
         }
-        let text_color = if destructive {
-            tokens.destructive
-        } else {
-            tokens
-                .foreground
-                .lerp_to_gamma(tokens.accent_foreground, hover_t)
-        };
-        let galley = ui.painter().layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::proportional(m.item_text),
-            text_color,
+        let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+        self.text_at(ui, rect, galley, color);
+        response
+    }
+
+    /// A hairline divider (`-mx-1 my-1 h-px bg-border/50`) bleeding into
+    /// the popover padding.
+    fn separator(&self, ui: &mut Ui) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(self.width, 9.0), Sense::hover());
+        let pad = f32::from(self.m.pad);
+        ui.painter().hline(
+            (rect.left() - pad)..=(rect.right() + pad),
+            rect.center().y.round(),
+            Stroke::new(1.0, self.tokens.border.gamma_multiply(0.5)),
         );
+    }
+
+    /// Paint `galley` at the row's text inset, centred vertically.
+    fn text_at(
+        &self,
+        ui: &Ui,
+        rect: egui::Rect,
+        galley: std::sync::Arc<egui::Galley>,
+        color: egui::Color32,
+    ) {
         let pos = egui::pos2(
-            rect.left() + m.item_pad_x,
+            rect.left() + self.m.item_pad_x,
             rect.center().y - galley.size().y / 2.0,
         );
-        ui.painter().galley(pos, galley, text_color);
+        ui.painter().galley(pos, galley, color);
     }
-    response
 }
 
-/// A hairline divider (`-mx-1 my-1 h-px bg-border/50`).
-fn separator_row(ui: &mut Ui, tokens: Tokens, m: DropdownMenuMetrics, width: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 9.0), Sense::hover());
-    let y = rect.center().y.round();
-    // `-mx-1` bleeds into the popover padding.
-    ui.painter().hline(
-        (rect.left() - f32::from(m.pad))..=(rect.right() + f32::from(m.pad)),
-        y,
-        Stroke::new(1.0, tokens.border.gamma_multiply(0.5)),
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    fn menu() -> DropdownMenu {
+        DropdownMenu::new()
+            .label("Quick Actions")
+            .item("Mute")
+            .separator()
+            .destructive("Delete Conversation")
+            .sizing(|m| m.min_width = 40.0)
+    }
+
+    /// Items are numbered in order, skipping labels and separators.
+    #[test]
+    fn clicking_reports_the_item_index() {
+        let ui = TestUi::new();
+        let mut picked = None;
+        let mut build = |ui: &mut Ui| {
+            let tokens = Tokens::get(ui);
+            picked = menu().show_contents(ui, tokens).or(picked);
+        };
+        let out = ui.frame(&mut build);
+        ui.click(
+            TestUi::text_rect(&out, "Delete Conversation").center(),
+            &mut build,
+        );
+        drop(build);
+        assert_eq!(picked, Some(1));
+    }
+
+    /// The menu is as wide as its widest row, never narrower than the floor.
+    #[test]
+    fn width_hugs_the_widest_row() {
+        let ui = TestUi::new();
+        let mut widths = (0.0, 0.0);
+        ui.frame(|ui| {
+            let m = menu();
+            let floor = DropdownMenu::new().item("A");
+            widths = (m.intrinsic_width(ui), floor.intrinsic_width(ui).max(128.0));
+        });
+        let delete = TestUi::new().frame(|ui| {
+            ui.label(egui::RichText::new("Delete Conversation").size(14.0));
+        });
+        let text_w = TestUi::text_rect(&delete, "Delete Conversation").width();
+        assert!(
+            (widths.0 - text_w - 16.0).abs() < 1.0,
+            "{widths:?} vs {text_w}"
+        );
+        assert!((widths.1 - 128.0).abs() < f32::EPSILON);
+    }
 }

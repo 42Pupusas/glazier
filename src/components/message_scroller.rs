@@ -104,6 +104,57 @@ enum Pending {
     End,
 }
 
+/// The row ids this frame that detect a new turn and prepended history
+/// (0 = none).
+#[derive(Clone, Copy)]
+struct Marks {
+    last_anchor: u64,
+    first_id: u64,
+}
+
+impl ScrollerState {
+    /// The scroll this frame's layout should perform, consuming any queued
+    /// request. An explicit request (the button) wins, then the initial
+    /// open, then a new turn.
+    fn take_action(&mut self, marks: Marks, open_at: Position) -> Action {
+        let pending = std::mem::take(&mut self.pending);
+        if pending == Pending::End {
+            return Action::End;
+        }
+        if !self.opened {
+            return match open_at {
+                Position::Start => Action::Start,
+                Position::End => Action::End,
+                Position::LastAnchor if marks.last_anchor == 0 => Action::End,
+                Position::LastAnchor => Action::AnchorTop,
+            };
+        }
+        if marks.last_anchor != 0 && marks.last_anchor != self.last_anchor {
+            return Action::AnchorTop;
+        }
+        Action::None
+    }
+
+    /// Older rows were prepended when the first row changed and the content
+    /// grew: the growth to push the offset by, so the visible row stays put.
+    fn prepended(&self, marks: Marks, content_h: f32) -> Option<f32> {
+        let changed = self.opened
+            && marks.first_id != 0
+            && self.first_id != 0
+            && marks.first_id != self.first_id;
+        (changed && content_h > self.content_h).then_some(content_h - self.content_h)
+    }
+
+    /// Remember this frame for next frame's detection.
+    const fn record(&mut self, marks: Marks, content_h: f32, offset_y: f32) {
+        self.opened = true;
+        self.last_anchor = marks.last_anchor;
+        self.first_id = marks.first_id;
+        self.content_h = content_h;
+        self.offset_y = offset_y;
+    }
+}
+
 /// Extra content above and below the viewport that remains fully rendered.
 ///
 /// The overscan keeps row heights warm and prevents blank flashes during a
@@ -181,7 +232,7 @@ impl<'a> MessageScroller<'a> {
     /// frames).
     pub fn new(id_source: impl Hash + std::fmt::Debug) -> Self {
         Self {
-            id_source: egui::Id::new(id_source),
+            id_source: egui::Id::unique(id_source),
             auto_scroll: false,
             peek: MessageScrollerMetrics::default().default_peek,
             default_position: Position::default(),
@@ -277,32 +328,12 @@ impl<'a> MessageScroller<'a> {
         let id = ui.make_persistent_id(self.id_source);
         let mut state: ScrollerState = ui.ctx().data_mut(|d| d.get_temp(id)).unwrap_or_default();
 
-        // The current last-anchor / first-row ids drive new-turn and prepend
-        // detection. Compute them before rendering.
-        let cur_last_anchor = self.items.iter().rfind(|i| i.anchor).map_or(0, |i| i.id);
-        let cur_first_id = self.items.first().map_or(0, |i| i.id);
-
-        // Decide what scroll action this frame's layout should perform.
-        // Explicit requests (button) win, then the initial open, then a new turn.
-        let new_anchor =
-            state.opened && cur_last_anchor != 0 && cur_last_anchor != state.last_anchor;
-        let action = match state.pending {
-            Pending::End => Action::End,
-            Pending::None if !state.opened => match self.default_position {
-                Position::Start => Action::Start,
-                Position::End => Action::End,
-                Position::LastAnchor => {
-                    if cur_last_anchor == 0 {
-                        Action::End
-                    } else {
-                        Action::AnchorTop
-                    }
-                }
-            },
-            Pending::None if new_anchor => Action::AnchorTop,
-            Pending::None => Action::None,
+        // Computed before rendering consumes the rows.
+        let marks = Marks {
+            last_anchor: self.items.iter().rfind(|i| i.anchor).map_or(0, |i| i.id),
+            first_id: self.items.first().map_or(0, |i| i.id),
         };
-        state.pending = Pending::None;
+        let action = state.take_action(marks, self.default_position);
 
         // An external relative nudge (e.g. PageUp/PageDown) queues a one-shot
         // offset from last frame's position. Skip it when an explicit action
@@ -321,19 +352,12 @@ impl<'a> MessageScroller<'a> {
         // --- Resolve scroll state for the button + prepend place-keeping. ---
         let viewport_h = out.inner_rect.height();
         let content_h = out.content_size.y;
-        let offset_y = out.state.offset.y;
+        let offset_y = out.state.clamped_offset().y;
         let can_scroll = content_h > viewport_h + 1.0;
         let at_bottom = offset_y + viewport_h >= content_h - m.edge_slack;
 
-        // Older rows were prepended: nudge the offset by the height that grew
-        // above the fold so the visible row stays put.
-        if state.opened
-            && cur_first_id != 0
-            && state.first_id != 0
-            && cur_first_id != state.first_id
-            && content_h > state.content_h
-        {
-            state.pending_offset = Some(offset_y + (content_h - state.content_h));
+        if let Some(grown) = state.prepended(marks, content_h) {
+            state.pending_offset = Some(offset_y + grown);
             ui.ctx().request_repaint();
         }
 
@@ -354,12 +378,7 @@ impl<'a> MessageScroller<'a> {
             ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
         }
 
-        // Persist detection state for next frame.
-        state.opened = true;
-        state.last_anchor = cur_last_anchor;
-        state.first_id = cur_first_id;
-        state.content_h = content_h;
-        state.offset_y = offset_y;
+        state.record(marks, content_h, offset_y);
         ui.ctx().data_mut(|d| d.insert_temp(id, state));
 
         ui.interact(out.inner_rect, out.id, Sense::hover())
@@ -555,6 +574,45 @@ fn hash_id(id: &impl Hash) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const fn marks(last_anchor: u64, first_id: u64) -> Marks {
+        Marks {
+            last_anchor,
+            first_id,
+        }
+    }
+
+    #[test]
+    fn the_first_frame_opens_at_the_default_position() {
+        let none = marks(0, 1);
+        let with_anchor = marks(7, 1);
+        let open = |m, at| ScrollerState::default().take_action(m, at);
+        assert!(open(none, Position::Start) == Action::Start);
+        assert!(open(none, Position::End) == Action::End);
+        assert!(open(none, Position::LastAnchor) == Action::End);
+        assert!(open(with_anchor, Position::LastAnchor) == Action::AnchorTop);
+    }
+
+    #[test]
+    fn later_frames_follow_requests_and_new_turns() {
+        let mut s = ScrollerState::default();
+        s.record(marks(7, 1), 100.0, 0.0);
+        assert!(s.take_action(marks(7, 1), Position::End) == Action::None);
+        assert!(s.take_action(marks(9, 1), Position::End) == Action::AnchorTop);
+        s.pending = Pending::End;
+        assert!(s.take_action(marks(7, 1), Position::End) == Action::End);
+        assert!(s.pending == Pending::None);
+    }
+
+    #[test]
+    fn prepending_reports_the_growth() {
+        let mut s = ScrollerState::default();
+        assert_eq!(s.prepended(marks(0, 2), 150.0), None);
+        s.record(marks(0, 1), 100.0, 0.0);
+        assert_eq!(s.prepended(marks(0, 1), 150.0), None);
+        assert_eq!(s.prepended(marks(0, 2), 90.0), None);
+        assert_eq!(s.prepended(marks(0, 2), 150.0), Some(50.0));
+    }
 
     /// A transcript renders its rows and survives a second frame (where the
     /// open-position and detection state kick in) without panicking.

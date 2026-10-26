@@ -16,11 +16,11 @@ system-fonts = []
 [dependencies]
 # Glazier components exchange egui types with their host application. Keep this
 # release line aligned so widget values never cross incompatible egui versions.
-egui = "0.36"
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+egui = "0.37"
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
-eframe = "0.36"
+eframe = "0.37"
 
 [lints.clippy]
 style = { level = "warn", priority = -1 }

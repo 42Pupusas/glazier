@@ -30,7 +30,7 @@
 
 use std::fmt;
 
-use egui::{Event, Key, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Color32, Event, FontId, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
@@ -61,10 +61,42 @@ impl Default for TimePickerMetrics {
 }
 
 /// The four editable sections, left to right.
-const SEG_HOUR: u8 = 0;
-const SEG_MIN: u8 = 1;
-const SEG_SEC: u8 = 2;
-const SEG_MERIDIEM: u8 = 3;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+enum Segment {
+    #[default]
+    Hour,
+    Minute,
+    Second,
+    Meridiem,
+}
+
+impl Segment {
+    const ALL: [Self; 4] = [Self::Hour, Self::Minute, Self::Second, Self::Meridiem];
+
+    const fn prev(self) -> Self {
+        match self {
+            Self::Hour | Self::Minute => Self::Hour,
+            Self::Second => Self::Minute,
+            Self::Meridiem => Self::Second,
+        }
+    }
+
+    const fn next(self) -> Self {
+        match self {
+            Self::Hour => Self::Minute,
+            Self::Minute => Self::Second,
+            Self::Second | Self::Meridiem => Self::Meridiem,
+        }
+    }
+
+    /// The largest value typing may enter into a numeric section.
+    const fn max_typed(self) -> u32 {
+        match self {
+            Self::Hour => 12,
+            _ => 59,
+        }
+    }
+}
 
 /// A 24-hour time of day, to second precision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -129,6 +161,52 @@ impl Time {
         let h = h12 % 12;
         self.hour = if is_pm { h + 12 } else { h };
     }
+
+    /// Step `value` by one within `0..modulus`, wrapping.
+    const fn bump(value: u32, modulus: u32, up: bool) -> u32 {
+        if up {
+            (value + 1) % modulus
+        } else {
+            (value + modulus - 1) % modulus
+        }
+    }
+
+    /// Step a section up or down by one, wrapping. The meridiem flips by 12
+    /// hours either way.
+    const fn step(&mut self, seg: Segment, up: bool) {
+        match seg {
+            Segment::Hour => self.hour = Self::bump(self.hour, 24, up),
+            Segment::Minute => self.minute = Self::bump(self.minute, 60, up),
+            Segment::Second => self.second = Self::bump(self.second, 60, up),
+            Segment::Meridiem => self.hour = (self.hour + 12) % 24,
+        }
+    }
+
+    /// Write a typed value into a numeric section. A typed hour is on the
+    /// 12-hour face, so `0` means 12 and the meridiem is kept.
+    const fn set_typed(&mut self, seg: Segment, value: u32) {
+        match seg {
+            Segment::Hour => {
+                let (_, is_pm) = self.to_12();
+                let h = if value == 0 { 12 } else { value };
+                self.set_hour_12(h, is_pm);
+            }
+            Segment::Minute => self.minute = value,
+            Segment::Second => self.second = value,
+            Segment::Meridiem => {}
+        }
+    }
+
+    /// The text shown in a section.
+    fn label(self, seg: Segment) -> String {
+        let (h12, is_pm) = self.to_12();
+        match seg {
+            Segment::Hour => format!("{h12:02}"),
+            Segment::Minute => format!("{:02}", self.minute),
+            Segment::Second => format!("{:02}", self.second),
+            Segment::Meridiem => if is_pm { "PM" } else { "AM" }.to_owned(),
+        }
+    }
 }
 
 impl fmt::Display for Time {
@@ -139,12 +217,177 @@ impl fmt::Display for Time {
 }
 
 /// Per-widget editing state held in egui memory: the focused section and the
-/// digits typed into it so far (so a second keypress appends rather than
+/// first digit typed into it, if any (so a second keypress appends rather than
 /// replaces).
 #[derive(Clone, Default)]
 struct EditState {
-    seg: u8,
-    buf: String,
+    seg: Segment,
+    pending: Option<u32>,
+}
+
+impl EditState {
+    /// Move to `seg` and start a fresh edit run there.
+    const fn focus(&mut self, seg: Segment) {
+        self.seg = seg;
+        self.pending = None;
+    }
+
+    /// Feed one typed character into the focused section. Returns `true` if
+    /// the time changed.
+    fn feed_char(&mut self, time: &mut Time, c: char) -> bool {
+        if self.seg == Segment::Meridiem {
+            return Self::feed_meridiem(time, c);
+        }
+        c.to_digit(10).is_some_and(|d| {
+            self.feed_digit(time, d);
+            true
+        })
+    }
+
+    /// `a` sets AM, `p` sets PM; anything else is ignored.
+    const fn feed_meridiem(time: &mut Time, c: char) -> bool {
+        let c = c.to_ascii_lowercase();
+        let is_pm = c == 'p';
+        if !is_pm && c != 'a' {
+            return false;
+        }
+        let (h12, _) = time.to_12();
+        time.set_hour_12(h12, is_pm);
+        true
+    }
+
+    /// Accumulate a digit into the focused numeric section, advancing when the
+    /// section is full or no second digit could be valid (`7` in minutes).
+    fn feed_digit(&mut self, time: &mut Time, d: u32) {
+        let max = self.seg.max_typed();
+        let full = self.pending.is_some();
+        let n = self.pending.map_or(d, |tens| tens * 10 + d);
+        time.set_typed(self.seg, if full { n.min(max) } else { n });
+        if full || n * 10 > max {
+            self.focus(self.seg.next());
+        } else {
+            self.pending = Some(n);
+        }
+    }
+}
+
+/// Where each section sits this frame, and what it reads.
+struct Layout {
+    labels: [String; 4],
+    rects: [Rect; 4],
+    font: FontId,
+    cy: f32,
+}
+
+impl Layout {
+    /// Lay the sections out left to right, a colon's width apart.
+    fn new(ui: &Ui, time: Time, rect: Rect, m: &TimePickerMetrics, color: Color32) -> Self {
+        let font = FontId::proportional(m.text);
+        let measure = |s: &str| {
+            ui.painter()
+                .layout_no_wrap(s.to_owned(), font.clone(), color)
+                .size()
+                .x
+        };
+        let labels = Segment::ALL.map(|seg| time.label(seg));
+        let colon_w = measure(":");
+        let mut x = rect.left() + m.pad_x;
+        let rects = std::array::from_fn(|i| {
+            // The meridiem keeps one width so the field doesn't jitter on AM↔PM.
+            let w = if Segment::ALL[i] == Segment::Meridiem {
+                measure("AM").max(measure("PM"))
+            } else {
+                measure(&labels[i])
+            };
+            let r = Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(w, m.height));
+            x += w + colon_w;
+            r
+        });
+        Self {
+            labels,
+            rects,
+            font,
+            cy: rect.center().y,
+        }
+    }
+
+    /// The section clicked this frame, if any. Every section is registered
+    /// each frame, so the fold must not short-circuit.
+    fn clicked(&self, ui: &Ui, id: Id) -> Option<Segment> {
+        Segment::ALL
+            .into_iter()
+            .zip(self.rects)
+            .fold(None, |hit, (seg, r)| {
+                let clicked = ui.interact(r, id.with(seg), Sense::click()).clicked();
+                if clicked {
+                    Some(seg)
+                } else {
+                    hit
+                }
+            })
+    }
+
+    /// Paint the field chrome, the sections, and the colons. `active` is the
+    /// focused section, or `None` when the picker isn't focused.
+    fn paint(
+        &self,
+        ui: &Ui,
+        rect: Rect,
+        active: Option<Segment>,
+        tokens: &Tokens,
+        m: &TimePickerMetrics,
+    ) {
+        // Matches Input: opaque `widget` surface, hairline border, focus ring.
+        let stroke = if active.is_some() {
+            Stroke::new(2.0, tokens.ring)
+        } else {
+            Stroke::new(1.0, tokens.input)
+        };
+        ui.painter().rect(
+            rect,
+            tokens.radius_md(),
+            tokens.widget,
+            stroke,
+            StrokeKind::Inside,
+        );
+        for (i, seg) in Segment::ALL.into_iter().enumerate() {
+            self.paint_segment(ui, i, active == Some(seg), tokens, m);
+        }
+        for r in &self.rects[..2] {
+            self.paint_text(ui, ":", r.right(), tokens.muted_foreground);
+        }
+    }
+
+    fn paint_segment(
+        &self,
+        ui: &Ui,
+        i: usize,
+        active: bool,
+        tokens: &Tokens,
+        m: &TimePickerMetrics,
+    ) {
+        let sr = self.rects[i];
+        let color = if active {
+            let sel = ui.visuals().selection;
+            let chip = Rect::from_min_max(
+                egui::pos2(sr.left() - m.chip_pad_x, m.text.mul_add(-0.75, self.cy)),
+                egui::pos2(sr.right() + m.chip_pad_x, m.text.mul_add(0.75, self.cy)),
+            );
+            ui.painter().rect_filled(chip, 4.0, sel.bg_fill);
+            sel.stroke.color
+        } else {
+            tokens.foreground
+        };
+        self.paint_text(ui, &self.labels[i], sr.left(), color);
+    }
+
+    fn paint_text(&self, ui: &Ui, text: &str, x: f32, color: Color32) {
+        let g = ui
+            .painter()
+            .layout_no_wrap(text.to_owned(), self.font.clone(), color);
+        ui.painter()
+            .galley(egui::pos2(x, self.cy - g.size().y / 2.0), g, color);
+    }
 }
 
 /// A segmented time-of-day editor.
@@ -168,7 +411,7 @@ impl<'a> TimePicker<'a> {
         Self {
             time,
             width: None,
-            id_salt: egui::Id::new("glazier-time-picker"),
+            id_salt: egui::Id::unique("glazier-time-picker"),
             sizing_hook: SizingHook::new(),
         }
     }
@@ -181,12 +424,11 @@ impl<'a> TimePicker<'a> {
 
     /// Disambiguate multiple time pickers in one view.
     pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id_salt = egui::Id::new(("glazier-time-picker", egui::Id::new(salt)));
+        self.id_salt = egui::Id::unique(("glazier-time-picker", egui::Id::unique(salt)));
         self
     }
 
     /// Render the picker. Returns `true` if the time changed this frame.
-    #[allow(clippy::too_many_lines)]
     pub fn show(mut self, ui: &mut Ui) -> bool {
         let tokens = Tokens::get(ui);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
@@ -195,194 +437,30 @@ impl<'a> TimePicker<'a> {
 
         let (rect, mut response) =
             ui.allocate_exact_size(Vec2::new(width, m.height), Sense::click());
-        let focused = response.has_focus();
-
-        // Claim the arrow keys so egui's focus navigation doesn't steal them:
-        // by default a focused widget surrenders focus on arrow presses (it
-        // moves to a neighbouring widget), which is why ↑/← used to defocus the
-        // picker — the move only fired when a target existed in that direction,
-        // hence the asymmetry. This filter keeps the arrows for us.
-        if response.has_focus() {
-            ui.memory_mut(|m| {
-                m.set_focus_lock_filter(
-                    response.id,
-                    egui::EventFilter {
-                        tab: false,
-                        horizontal_arrows: true,
-                        vertical_arrows: true,
-                        escape: false,
-                    },
-                );
-            });
-        }
-
+        let was_focused = response.has_focus();
         let mut state: EditState = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
-        let mut changed = false;
+        let layout = Layout::new(ui, *self.time, rect, &m, tokens.foreground);
 
-        // --- Section text + geometry --------------------------------------
-        let (h12, is_pm) = self.time.to_12();
-        let labels = [
-            format!("{h12:02}"),
-            format!("{:02}", self.time.minute),
-            format!("{:02}", self.time.second),
-            if is_pm {
-                "PM".to_owned()
-            } else {
-                "AM".to_owned()
-            },
-        ];
-        let font = egui::FontId::proportional(m.text);
-        let measure = |ui: &Ui, s: &str| {
-            ui.painter()
-                .layout_no_wrap(s.to_owned(), font.clone(), tokens.foreground)
-                .size()
-                .x
-        };
-        let colon_w = measure(ui, ":");
-        let seg_w = [
-            measure(ui, &labels[0]),
-            measure(ui, &labels[1]),
-            measure(ui, &labels[2]),
-            measure(ui, "AM").max(measure(ui, "PM")),
-        ];
-
-        // Lay sections out left to right with ":" separators and a space before
-        // the meridiem. Records each section's hit rect.
-        let mut x = rect.left() + m.pad_x;
-        let cy = rect.center().y;
-        let mut seg_rects = [Rect::NOTHING; 4];
-        for i in 0..4 {
-            let w = seg_w[i];
-            seg_rects[i] = Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(w, m.height));
-            x += w;
-            // Separators: ":" between numbers, a space before the meridiem.
-            if i == SEG_HOUR as usize || i == SEG_MIN as usize {
-                x += colon_w;
-            } else if i == SEG_SEC as usize {
-                x += colon_w; // a gap roughly a colon wide before AM/PM
-            }
+        if let Some(seg) = layout.clicked(ui, id) {
+            state.focus(seg);
+            response.request_focus();
         }
-
-        // --- Interaction: click a section, or focus the widget ------------
-        for (i, sr) in seg_rects.iter().enumerate() {
-            let r = ui.interact(*sr, id.with(("seg", i)), Sense::click());
-            if r.clicked() {
-                state.seg = u8::try_from(i).unwrap_or(0);
-                state.buf.clear();
-                response.request_focus();
-            }
-        }
-        if response.clicked() && !focused {
+        if response.clicked() && !was_focused {
             response.request_focus();
         }
 
-        // --- Keyboard handling (only while focused) ----------------------
-        if response.has_focus() {
-            // Arrow keys must be *consumed*: otherwise egui's own keyboard focus
-            // navigation and scroll-area handling act on the same press, which
-            // steals focus (↑) and swallows section moves (←/→). Consuming them
-            // here claims them for the picker before anyone else sees them.
-            let (mut left, mut right, mut up, mut down) = (false, false, false, false);
-            ui.input_mut(|i| {
-                use egui::Modifiers;
-                left = i.consume_key(Modifiers::NONE, Key::ArrowLeft);
-                right = i.consume_key(Modifiers::NONE, Key::ArrowRight);
-                up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
-                down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
-            });
-            if left {
-                state.seg = state.seg.saturating_sub(1);
-                state.buf.clear();
-            }
-            if right {
-                state.seg = (state.seg + 1).min(SEG_MERIDIEM);
-                state.buf.clear();
-            }
-            if up {
-                step(self.time, state.seg, 1);
-                state.buf.clear();
-                changed = true;
-            }
-            if down {
-                step(self.time, state.seg, -1);
-                state.buf.clear();
-                changed = true;
-            }
-
-            // Digit / meridiem entry comes through as text events.
-            let events = ui.input(|i| i.events.clone());
-            for ev in events {
-                if let Event::Text(t) = ev {
-                    for c in t.chars() {
-                        if feed_char(self.time, &mut state, c) {
-                            changed = true;
-                        }
-                    }
-                }
-            }
+        let focused = response.has_focus();
+        let changed = if focused {
+            Self::claim_arrows(ui, response.id);
+            self.handle_keys(ui, &mut state)
         } else {
             // Dropping focus ends the current edit run.
-            state.buf.clear();
-        }
+            state.pending = None;
+            false
+        };
 
-        // --- Paint --------------------------------------------------------
         if ui.is_rect_visible(rect) {
-            // Field chrome: matches Input (bg, hairline border, radius-md), with
-            // a focus ring when active (shadcn `focus-visible:ring`).
-            let stroke = if response.has_focus() {
-                Stroke::new(2.0, tokens.ring)
-            } else {
-                Stroke::new(1.0, tokens.input)
-            };
-            // Opaque `widget` surface — `background` is the app-canvas token
-            // and may be translucent under a user theme.
-            ui.painter().rect(
-                rect,
-                tokens.radius_md(),
-                tokens.widget,
-                stroke,
-                StrokeKind::Inside,
-            );
-
-            let sel = ui.visuals().selection;
-            let paint_seg = |ui: &Ui, i: usize| {
-                let sr = seg_rects[i];
-                let active = response.has_focus() && state.seg as usize == i;
-                let color = if active {
-                    let chip = Rect::from_min_max(
-                        egui::pos2(sr.left() - m.chip_pad_x, m.text.mul_add(-0.75, cy)),
-                        egui::pos2(sr.right() + m.chip_pad_x, m.text.mul_add(0.75, cy)),
-                    );
-                    ui.painter().rect_filled(chip, 4.0, sel.bg_fill);
-                    sel.stroke.color
-                } else {
-                    tokens.foreground
-                };
-                let g = ui
-                    .painter()
-                    .layout_no_wrap(labels[i].clone(), font.clone(), color);
-                ui.painter()
-                    .galley(egui::pos2(sr.left(), cy - g.size().y / 2.0), g, color);
-            };
-            for i in 0..4 {
-                paint_seg(ui, i);
-            }
-
-            // Separators in muted foreground.
-            let colon1 = seg_rects[0].right();
-            let colon2 = seg_rects[1].right();
-            for cx in [colon1, colon2] {
-                let g = ui.painter().layout_no_wrap(
-                    ":".to_owned(),
-                    font.clone(),
-                    tokens.muted_foreground,
-                );
-                ui.painter().galley(
-                    egui::pos2(cx, cy - g.size().y / 2.0),
-                    g,
-                    tokens.muted_foreground,
-                );
-            }
+            layout.paint(ui, rect, focused.then_some(state.seg), &tokens, &m);
         }
 
         ui.data_mut(|d| d.insert_temp(id, state));
@@ -391,91 +469,68 @@ impl<'a> TimePicker<'a> {
         }
         changed
     }
-}
 
-/// Step a section up (`up == true`) or down by one, wrapping. Meridiem toggles
-/// via a 12-hour shift.
-const fn bump(value: u32, modulus: u32, up: bool) -> u32 {
-    if up {
-        (value + 1) % modulus
-    } else {
-        (value + modulus - 1) % modulus
+    /// Keep the arrow keys away from egui's focus navigation, which would
+    /// otherwise move focus to a neighbouring widget on ↑/← and lose the edit.
+    fn claim_arrows(ui: &Ui, widget: Id) {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                widget,
+                egui::EventFilter {
+                    tab: false,
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    escape: false,
+                },
+            );
+        });
     }
-}
 
-/// Step a section by `delta` (±1), wrapping.
-const fn step(time: &mut Time, seg: u8, delta: i32) {
-    let up = delta > 0;
-    match seg {
-        SEG_HOUR => time.hour = bump(time.hour, 24, up),
-        SEG_MIN => time.minute = bump(time.minute, 60, up),
-        SEG_SEC => time.second = bump(time.second, 60, up),
-        _ => time.hour = (time.hour + 12) % 24, // meridiem
-    }
-}
-
-/// Feed one typed character into the focused section. Returns `true` if the time
-/// changed. Numeric sections accumulate up to two digits and auto-advance once
-/// no further digit could fit; the meridiem responds to `a`/`p`.
-fn feed_char(time: &mut Time, state: &mut EditState, c: char) -> bool {
-    if state.seg == SEG_MERIDIEM {
-        let (h12, _) = time.to_12();
-        match c.to_ascii_lowercase() {
-            'a' => {
-                time.set_hour_12(h12, false);
-                true
-            }
-            'p' => {
-                time.set_hour_12(h12, true);
-                true
-            }
-            _ => false,
+    /// Apply this frame's arrows and typed text. Returns `true` if the time
+    /// changed.
+    fn handle_keys(&mut self, ui: &Ui, state: &mut EditState) -> bool {
+        // Consumed, so scroll areas and focus navigation never see them.
+        let [left, right, up, down] = ui.input_mut(|i| {
+            [
+                Key::ArrowLeft,
+                Key::ArrowRight,
+                Key::ArrowUp,
+                Key::ArrowDown,
+            ]
+            .map(|key| i.consume_key(Modifiers::NONE, key))
+        });
+        if left {
+            state.focus(state.seg.prev());
         }
-    } else if let Some(d) = c.to_digit(10) {
-        feed_digit(time, state, d);
-        true
-    } else {
-        false
-    }
-}
-
-/// Accumulate a digit into the focused numeric section, advancing when the
-/// section is full or no second digit could be valid.
-fn feed_digit(time: &mut Time, state: &mut EditState, d: u32) {
-    let max = if state.seg == SEG_HOUR { 12 } else { 59 };
-    state.buf.push(char::from_digit(d, 10).unwrap_or('0'));
-    let n: u32 = state.buf.parse().unwrap_or(0);
-
-    let (value, advance) = if state.buf.len() >= 2 {
-        // Second digit: combine, clamp, and move on.
-        (n.min(max), true)
-    } else if n * 10 > max {
-        // First digit can't be a tens digit (e.g. 7 in minutes) → commit now.
-        (n, true)
-    } else {
-        (n, false)
-    };
-
-    match state.seg {
-        SEG_HOUR => {
-            let (_, is_pm) = time.to_12();
-            let h = if value == 0 { 12 } else { value };
-            time.set_hour_12(h, is_pm);
+        if right {
+            state.focus(state.seg.next());
         }
-        SEG_MIN => time.minute = value,
-        SEG_SEC => time.second = value,
-        _ => {}
-    }
+        for (pressed, step_up) in [(up, true), (down, false)] {
+            if pressed {
+                self.time.step(state.seg, step_up);
+                state.pending = None;
+            }
+        }
 
-    if advance {
-        state.seg = (state.seg + 1).min(SEG_MERIDIEM);
-        state.buf.clear();
+        let typed: String = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|ev| match ev {
+                    Event::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        });
+        typed.chars().fold(up || down, |changed, c| {
+            state.feed_char(self.time, c) | changed
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::TestUi;
 
     /// `Time::new` clamps each component into range.
     #[test]
@@ -525,14 +580,16 @@ mod tests {
     #[test]
     fn step_wraps() {
         let mut t = Time::new(23, 59, 59);
-        step(&mut t, SEG_HOUR, 1);
+        t.step(Segment::Hour, true);
         assert_eq!(t.hour, 0);
-        step(&mut t, SEG_MIN, 1);
+        t.step(Segment::Minute, true);
         assert_eq!(t.minute, 0);
-        step(&mut t, SEG_SEC, 1);
+        t.step(Segment::Second, true);
         assert_eq!(t.second, 0);
+        t.step(Segment::Second, false);
+        assert_eq!(t.second, 59);
         let mut pm = Time::new(9, 0, 0); // AM
-        step(&mut pm, SEG_MERIDIEM, 1);
+        pm.step(Segment::Meridiem, true);
         assert_eq!(pm.hour, 21); // now PM
     }
 
@@ -542,15 +599,101 @@ mod tests {
         let mut t = Time::new(0, 0, 0);
         let mut st = EditState::default();
         // Hour: "1" waits, "1" → 11 and advances to minutes.
-        feed_digit(&mut t, &mut st, 1);
-        assert_eq!(st.seg, SEG_HOUR);
-        feed_digit(&mut t, &mut st, 1);
-        assert_eq!(st.seg, SEG_MIN);
-        let (h, _) = t.to_12();
-        assert_eq!(h, 11);
+        st.feed_digit(&mut t, 1);
+        assert_eq!(st.seg, Segment::Hour);
+        st.feed_digit(&mut t, 1);
+        assert_eq!(st.seg, Segment::Minute);
+        assert_eq!(t.to_12().0, 11);
         // Minute: "7" can't start a 7x minute → commits 07, advances.
-        feed_digit(&mut t, &mut st, 7);
+        st.feed_digit(&mut t, 7);
         assert_eq!(t.minute, 7);
-        assert_eq!(st.seg, SEG_SEC);
+        assert_eq!(st.seg, Segment::Second);
+    }
+
+    /// The meridiem takes `a`/`p` and ignores other characters.
+    #[test]
+    fn meridiem_takes_a_and_p() {
+        let mut t = Time::new(9, 0, 0);
+        let mut st = EditState::default();
+        st.focus(Segment::Meridiem);
+        assert!(st.feed_char(&mut t, 'P'));
+        assert_eq!(t.hour, 21);
+        assert!(st.feed_char(&mut t, 'a'));
+        assert_eq!(t.hour, 9);
+        assert!(!st.feed_char(&mut t, '5'));
+        st.focus(Segment::Minute);
+        assert!(!st.feed_char(&mut t, 'x'));
+    }
+
+    /// A picker on a headless context, fed real pointer and key input.
+    struct Rig {
+        ui: TestUi,
+        time: Time,
+        changed: bool,
+        origin: egui::Pos2,
+    }
+
+    impl Rig {
+        fn new(time: Time) -> Self {
+            let mut rig = Self {
+                ui: TestUi::new(),
+                time,
+                changed: false,
+                origin: egui::Pos2::ZERO,
+            };
+            rig.input(Vec::new());
+            rig
+        }
+
+        fn build(&mut self) -> impl FnMut(&mut Ui) + '_ {
+            |ui| {
+                self.origin = ui.cursor().min;
+                self.changed |= TimePicker::new(&mut self.time).width(240.0).show(ui);
+            }
+        }
+
+        fn input(&mut self, events: Vec<Event>) {
+            let ui = std::mem::take(&mut self.ui);
+            ui.frame_with(events, self.build());
+            self.ui = ui;
+        }
+
+        /// Click the hour section.
+        fn click_hour(&mut self) {
+            let pos = self.origin + egui::vec2(16.0, 18.0);
+            let ui = std::mem::take(&mut self.ui);
+            ui.click(pos, self.build());
+            self.ui = ui;
+        }
+    }
+
+    /// Clicking a section, then arrows and digits, edits the bound time.
+    #[test]
+    fn keyboard_edits_the_focused_section() {
+        let mut rig = Rig::new(Time::new(10, 30, 0));
+        rig.click_hour();
+        rig.input(vec![TestUi::key(Key::ArrowUp)]);
+        assert_eq!(rig.time.hour, 11);
+        assert!(rig.changed);
+
+        rig.input(vec![
+            TestUi::key(Key::ArrowRight),
+            TestUi::key(Key::ArrowRight),
+            TestUi::key(Key::ArrowLeft),
+        ]);
+        rig.input(vec![Event::Text("45".to_owned())]);
+        assert_eq!(rig.time.minute, 45);
+
+        rig.input(vec![TestUi::key(Key::ArrowDown)]);
+        assert_eq!(rig.time.second, 59);
+    }
+
+    /// Without focus the picker ignores typing.
+    #[test]
+    fn unfocused_picker_ignores_typing() {
+        let mut rig = Rig::new(Time::new(10, 30, 0));
+        rig.input(vec![Event::Text("7".to_owned()), TestUi::key(Key::ArrowUp)]);
+        assert_eq!(rig.time, Time::new(10, 30, 0));
+        assert!(!rig.changed);
     }
 }

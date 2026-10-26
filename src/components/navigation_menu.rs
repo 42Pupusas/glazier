@@ -127,6 +127,50 @@ struct NavState {
     panel_hovered: bool,
 }
 
+impl NavState {
+    /// Settle on `open`, cancelling any pending transition.
+    const fn settle(&mut self, open: Option<usize>) {
+        self.open = open;
+        self.pending_since = None;
+        self.pending_target = None;
+    }
+
+    /// Advance the open/switch/close timer at `now`, given the hovered
+    /// trigger. Returns the seconds still to wait, if a timer is running.
+    fn tick(&mut self, hovered: Option<usize>, now: f64, m: &NavigationMenuMetrics) -> Option<f64> {
+        // The target is the hovered trigger, or the open menu while the
+        // pointer rests on its panel.
+        let target = hovered.or_else(|| self.open.filter(|_| self.panel_hovered));
+        if target == self.open {
+            self.settle(self.open);
+            return None;
+        }
+        // Switching between menus while one is open is instant, matching
+        // the web's immediate swap once the menu is showing.
+        if self.open.is_some() && target.is_some() {
+            self.settle(target);
+            return None;
+        }
+        // Opening from closed, or closing: rest for the matching delay.
+        let delay = f64::from(if target.is_some() {
+            m.open_delay
+        } else {
+            m.close_delay
+        });
+        if self.pending_target != target {
+            self.pending_target = target;
+            self.pending_since = Some(now);
+        }
+        let start = *self.pending_since.get_or_insert(now);
+        let remaining = delay - (now - start);
+        if remaining <= 0.0 {
+            self.settle(target);
+            return None;
+        }
+        Some(remaining)
+    }
+}
+
 /// What the bar resolves to this frame, returned by [`NavigationMenu::show`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavResponse {
@@ -171,7 +215,7 @@ impl NavigationMenu {
     /// panel is open across frames).
     pub fn new(id_salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
-            id_salt: Id::new(id_salt),
+            id_salt: Id::unique(id_salt),
             items: Vec::new(),
             style_hook: StyleHook::new(),
             sizing_hook: SizingHook::new(),
@@ -202,40 +246,39 @@ impl NavigationMenu {
         let mut open_anchor = None;
         let mut hovered_trigger: Option<usize> = None;
 
+        let trigger = Trigger { tokens, m };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, item) in self.items.iter().enumerate() {
                 let is_open = state.open == Some(i);
-                let resp = trigger_row(ui, tokens, m, &item.label, item.has_panel, is_open);
-
-                if item.has_panel {
-                    if resp.hovered() {
-                        hovered_trigger = Some(i);
-                    }
+                let resp = trigger.show(ui, &item.label, item.has_panel, is_open);
+                if !item.has_panel {
                     if resp.clicked() {
-                        // Click toggles immediately (and cancels any timer).
-                        state.open = if is_open { None } else { Some(i) };
-                        state.pending_since = None;
-                        state.pending_target = None;
+                        // Clicking a plain link closes any open panel.
+                        link_clicked = Some(i);
+                        state.settle(None);
                     }
-                    if is_open {
-                        let width = item.panel_width.unwrap_or(m.default_panel_w);
-                        open_anchor = Some((resp.rect, width));
-                    }
-                } else if resp.clicked() {
-                    link_clicked = Some(i);
-                    // Clicking a plain link closes any open panel.
-                    state.open = None;
-                    state.pending_since = None;
+                    continue;
+                }
+                if resp.hovered() {
+                    hovered_trigger = Some(i);
+                }
+                if resp.clicked() {
+                    // A click toggles immediately.
+                    state.settle(if is_open { None } else { Some(i) });
+                }
+                if is_open {
+                    let width = item.panel_width.unwrap_or(m.default_panel_w);
+                    open_anchor = Some((resp.rect, width));
                 }
             }
             bar_rect = ui.min_rect();
         });
 
-        // Drive the hover state machine: the target is the hovered trigger (to
-        // open/switch) or `None` once the pointer rests off both bar and panel
-        // (to close). Switching between already-open menus is instant.
-        Self::drive(&ctx, &mut state, now, hovered_trigger, m);
+        if let Some(remaining) = state.tick(hovered_trigger, now, &m) {
+            // A still pointer sends no events; wake when the delay is due.
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+        }
 
         // Render the flyout panel for the open menu.
         if let (Some(open), Some((anchor, width))) = (state.open, open_anchor) {
@@ -254,58 +297,6 @@ impl NavigationMenu {
 
         ctx.memory_mut(|d| d.data.insert_temp(state_id, state));
         NavResponse { link_clicked }
-    }
-
-    /// Advance the open/switch/close timer for one frame.
-    fn drive(
-        ctx: &egui::Context,
-        state: &mut NavState,
-        now: f64,
-        hovered: Option<usize>,
-        m: NavigationMenuMetrics,
-    ) {
-        // "Active target" = hovered trigger, or keep-open if the panel is hovered.
-        let target = hovered.or(if state.panel_hovered {
-            state.open
-        } else {
-            None
-        });
-
-        if target == state.open {
-            // Already where we want to be; cancel any pending transition.
-            state.pending_since = None;
-            state.pending_target = None;
-            return;
-        }
-
-        // An open→other-open switch is instant (no rest), matching the web's
-        // "motion-safe" immediate swap once the menu is already showing.
-        if state.open.is_some() && target.is_some() {
-            state.open = target;
-            state.pending_since = None;
-            state.pending_target = None;
-            return;
-        }
-
-        // Opening from closed, or closing to none: run the appropriate timer.
-        let delay = f64::from(if target.is_some() {
-            m.open_delay
-        } else {
-            m.close_delay
-        });
-        if state.pending_target != target {
-            state.pending_target = target;
-            state.pending_since = Some(now);
-        }
-        let start = state.pending_since.get_or_insert(now);
-        if now - *start >= delay {
-            state.open = target;
-            state.pending_since = None;
-            state.pending_target = None;
-        } else {
-            let remaining = (delay - (now - *start)).max(0.0);
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
-        }
     }
 
     /// Float the flyout panel below the bar; returns whether it's hovered.
@@ -368,34 +359,38 @@ impl NavigationMenu {
     }
 }
 
-/// A single nav trigger: ghost text (plus a chevron for menus) that takes the
-/// `accent` surface on hover or while its panel is open.
-fn trigger_row(
-    ui: &mut Ui,
+/// Paints the bar's triggers.
+struct Trigger {
     tokens: Tokens,
     m: NavigationMenuMetrics,
-    label: &str,
-    has_panel: bool,
-    open: bool,
-) -> Response {
-    let galley = ui.painter().layout_no_wrap(
-        label.to_owned(),
-        egui::FontId::proportional(m.trigger_text),
-        tokens.foreground,
-    );
-    let chevron_w = if has_panel {
-        m.chevron_gap + m.chevron_size
-    } else {
-        0.0
-    };
-    let width = 2.0_f32.mul_add(m.trigger_pad_x, galley.size().x + chevron_w);
-    let height = 2.0_f32
-        .mul_add(m.trigger_pad_y, galley.size().y)
-        .max(m.trigger_min_h);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+}
 
-    if ui.is_rect_visible(rect) {
+impl Trigger {
+    /// Ghost text (plus a chevron for menus) that takes the `accent` surface
+    /// on hover or while its panel is open.
+    fn show(&self, ui: &mut Ui, label: &str, has_panel: bool, open: bool) -> Response {
+        let (tokens, m) = (self.tokens, self.m);
+        let font = egui::FontId::proportional(m.trigger_text);
+        let galley =
+            ui.painter()
+                .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER);
+        let chevron_w = if has_panel {
+            m.chevron_gap + m.chevron_size
+        } else {
+            0.0
+        };
+        let content_w = galley.size().x + chevron_w;
+        let size = Vec2::new(
+            m.trigger_pad_x.mul_add(2.0, content_w),
+            m.trigger_pad_y
+                .mul_add(2.0, galley.size().y)
+                .max(m.trigger_min_h),
+        );
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         let hover_t =
             ui.ctx()
                 .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
@@ -409,31 +404,82 @@ fn trigger_row(
                 StrokeKind::Inside,
             );
         }
-        let text_color = tokens
+        let color = tokens
             .foreground
             .lerp_to_gamma(tokens.accent_foreground, fill_t);
-
-        // Centre the label (+ chevron) as a unit.
-        let content_w = galley.size().x + chevron_w;
-        let mut x = rect.center().x - content_w / 2.0;
-        let galley = ui.painter().layout_no_wrap(
-            label.to_owned(),
-            egui::FontId::proportional(m.trigger_text),
-            text_color,
-        );
+        // Centre the label and chevron as one run.
+        let x = rect.center().x - content_w / 2.0;
+        let text_w = galley.size().x;
         let gy = rect.center().y - galley.size().y / 2.0;
-        ui.painter().galley(egui::pos2(x, gy), galley, text_color);
-        x += content_w - chevron_w + m.chevron_gap;
+        ui.painter().galley(egui::pos2(x, gy), galley, color);
         if has_panel {
-            let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(x, rect.center().y - m.chevron_size / 2.0),
+            let icon = egui::Rect::from_min_size(
+                egui::pos2(
+                    x + text_w + m.chevron_gap,
+                    rect.center().y - m.chevron_size / 2.0,
+                ),
                 Vec2::splat(m.chevron_size),
             );
             Icon::new(CHEVRON_DOWN)
-                .color(text_color)
+                .color(color)
                 .image(tokens)
-                .paint_at(ui, icon_rect);
+                .paint_at(ui, icon);
         }
+        response
     }
-    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    #[test]
+    fn the_timer_opens_switches_and_closes() {
+        let m = NavigationMenuMetrics::default();
+        let mut s = NavState::default();
+        // Opening waits out the open delay.
+        assert!(s.tick(Some(0), 0.0, &m).is_some());
+        assert_eq!(s.tick(Some(0), 1.0, &m), None);
+        assert_eq!(s.open, Some(0));
+        // Switching while open is instant.
+        assert_eq!(s.tick(Some(1), 1.1, &m), None);
+        assert_eq!(s.open, Some(1));
+        // Resting on the panel keeps it open.
+        s.panel_hovered = true;
+        assert_eq!(s.tick(None, 1.2, &m), None);
+        assert_eq!(s.open, Some(1));
+        // Leaving both closes after the close delay.
+        s.panel_hovered = false;
+        assert!(s.tick(None, 1.3, &m).is_some());
+        assert_eq!(s.tick(None, 2.0, &m), None);
+        assert_eq!(s.open, None);
+    }
+
+    /// A click opens a menu's panel; a link reports itself and closes it.
+    #[test]
+    fn clicks_toggle_panels_and_report_links() {
+        let ui = TestUi::new();
+        let mut link = None;
+        let mut shown = Vec::new();
+        let mut build = |ui: &mut Ui| {
+            let r = NavigationMenu::new("nav")
+                .item(NavItem::menu("Components").panel_width(900.0))
+                .item(NavItem::link("Docs"))
+                .show(ui, |i, ui| {
+                    shown.push(i);
+                    ui.label("panel");
+                });
+            link = r.link_clicked.or(link);
+        };
+        let out = ui.frame(&mut build);
+        let components = TestUi::text_rect(&out, "Components").center();
+        let docs = TestUi::text_rect(&out, "Docs").center();
+        ui.click(components, &mut build);
+        ui.frame(&mut build);
+        ui.click(docs, &mut build);
+        drop(build);
+        assert_eq!(link, Some(1));
+        assert!(shown.contains(&0));
+    }
 }

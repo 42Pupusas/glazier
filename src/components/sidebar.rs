@@ -82,7 +82,7 @@ const PANEL_LEFT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 
 /// The memory key for a sidebar's collapsed flag.
 fn state_id(id_salt: &str) -> Id {
-    Id::new(("glazier-sidebar", id_salt))
+    Id::unique(("glazier-sidebar", id_salt))
 }
 
 /// Read whether the sidebar with `id_salt` is currently collapsed.
@@ -390,7 +390,7 @@ fn trigger_button(ui: &Ui, tokens: Tokens, m: SidebarMetrics, row: Rect) -> egui
         Vec2::splat(m.trigger_h * 0.8),
     );
     let resp = ui
-        .interact(btn, ui.id().with("sb-trigger"), Sense::click())
+        .interact(btn, ui.scope_id().with("sb-trigger"), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     paint_trigger(ui, tokens, btn, resp.hovered());
     resp

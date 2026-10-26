@@ -146,3 +146,53 @@ impl<W: Widget> Widget for Styled<W> {
             .response
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    /// Resolve `build`'s spec against a default style.
+    fn frame(build: impl Fn(Styled<egui::Label>) -> Styled<egui::Label>) -> Frame {
+        let mut out = Frame::new();
+        TestUi::new().frame(|ui| {
+            let styled = build(Styled::new(egui::Label::new("x")));
+            out = styled.spec.resolve(ui);
+            ui.add(styled);
+        });
+        out
+    }
+
+    #[test]
+    fn decorators_collapse_into_one_frame() {
+        let visuals = egui::Visuals::default().widgets.noninteractive;
+        let plain = frame(|s| s);
+        assert_eq!(plain.stroke, egui::Stroke::NONE);
+
+        let card = frame(|s| s.carded().rounded_to(3).padded(5.0));
+        assert_eq!(card.fill, visuals.bg_fill);
+        assert_eq!(card.corner_radius, CornerRadius::same(3));
+        assert_eq!(card.inner_margin, egui::Margin::same(5));
+
+        // A bare radius borrows the noninteractive stroke so it shows.
+        let rounded = frame(Styled::rounded);
+        assert_eq!(rounded.corner_radius, visuals.corner_radius);
+        assert_eq!(rounded.stroke, visuals.bg_stroke);
+    }
+
+    #[test]
+    fn the_trait_starts_the_chain() {
+        let mut n = 0;
+        TestUi::new().frame(|ui| {
+            for styled in [
+                egui::Label::new("a").carded(),
+                egui::Label::new("b").rounded(),
+                egui::Label::new("c").rounded_to(2),
+                egui::Label::new("d").padded(4.0),
+            ] {
+                n += usize::from(ui.add(styled).rect.width() > 0.0);
+            }
+        });
+        assert_eq!(n, 4);
+    }
+}

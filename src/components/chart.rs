@@ -205,7 +205,7 @@ impl Chart {
             1.0
         } else {
             // Round up to a "nice" ceiling for tidy gridlines.
-            nice_ceiling(peak)
+            Value(peak).nice_ceiling()
         }
     }
 
@@ -241,15 +241,16 @@ impl Chart {
         Self::paint_grid(ui, tokens, m, plot, y_max);
         self.paint_x_labels(ui, tokens, m, plot, rect);
 
-        let hover = response
+        let bands = Bands { plot, n };
+        let active = response
             .hover_pos()
-            .filter(|p| plot.x_range().contains(p.x));
-        let active = hover.map(|p| Self::nearest_category(plot, p.x, n));
+            .filter(|p| plot.x_range().contains(p.x))
+            .map(|p| bands.at(p.x));
 
         match self.kind {
-            Kind::Bar => self.paint_bars(ui, plot, y_max, n, active),
-            Kind::Line => self.paint_lines(ui, plot, y_max, n, false, active),
-            Kind::Area => self.paint_lines(ui, plot, y_max, n, true, active),
+            Kind::Bar => self.paint_bars(ui, bands, y_max, active),
+            Kind::Line => self.paint_lines(ui, bands, y_max, false, active),
+            Kind::Area => self.paint_lines(ui, bands, y_max, true, active),
         }
 
         if legend_h > 0.0 {
@@ -259,7 +260,7 @@ impl Chart {
         }
 
         if let Some(idx) = active {
-            self.paint_tooltip(ui, tokens, m, plot, idx, n);
+            self.paint_tooltip(ui, tokens, m, bands, idx);
         }
 
         response
@@ -267,20 +268,17 @@ impl Chart {
 
     /// Horizontal gridlines + a baseline, in the muted border colour.
     fn paint_grid(ui: &Ui, tokens: Tokens, m: ChartMetrics, plot: Rect, y_max: f32) {
+        const LINES: u8 = 4;
         let painter = ui.painter();
-        let lines = 4;
         let faint = tokens.border.gamma_multiply(0.7);
-        for i in 0..=lines {
-            #[allow(clippy::cast_precision_loss)]
-            let t = i as f32 / lines as f32;
-            let y = plot.bottom() - t * plot.height();
+        for i in 0..=LINES {
+            let t = f32::from(i) / f32::from(LINES);
+            let y = t.mul_add(-plot.height(), plot.bottom());
             painter.hline(plot.x_range(), y, Stroke::new(1.0, faint));
-            // y-axis tick label.
-            let val = t * y_max;
             painter.text(
                 Pos2::new(plot.left() - 2.0, y),
                 Align2::RIGHT_CENTER,
-                format_tick(val),
+                Value(t * y_max).tick(),
                 FontId::proportional(m.axis_text),
                 tokens.muted_foreground,
             );
@@ -290,9 +288,12 @@ impl Chart {
     /// X-axis category labels under the plot.
     fn paint_x_labels(&self, ui: &Ui, tokens: Tokens, m: ChartMetrics, plot: Rect, rect: Rect) {
         let painter = ui.painter();
-        let n = self.labels.len();
+        let bands = Bands {
+            plot,
+            n: self.labels.len(),
+        };
         for (i, label) in self.labels.iter().enumerate() {
-            let x = Self::category_center(plot, i, n);
+            let x = bands.center(i);
             painter.text(
                 Pos2::new(x, rect.top() + self.height - 14.0),
                 Align2::CENTER_TOP,
@@ -303,24 +304,6 @@ impl Chart {
         }
     }
 
-    /// The x-centre of category `i`.
-    #[allow(clippy::cast_precision_loss)]
-    fn category_center(plot: Rect, i: usize, n: usize) -> f32 {
-        let band = plot.width() / n as f32;
-        band.mul_add(i as f32 + 0.5, plot.left())
-    }
-
-    /// Which category a pointer x falls in.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    fn nearest_category(plot: Rect, x: f32, n: usize) -> usize {
-        let band = plot.width() / n as f32;
-        (((x - plot.left()) / band).floor() as usize).min(n - 1)
-    }
-
     /// Map a value to a y-coordinate inside the plot.
     fn y_of(plot: Rect, value: f32, y_max: f32) -> f32 {
         (value / y_max)
@@ -329,21 +312,22 @@ impl Chart {
     }
 
     /// Grouped vertical bars.
-    #[allow(clippy::cast_precision_loss)]
-    fn paint_bars(&self, ui: &Ui, plot: Rect, y_max: f32, n: usize, active: Option<usize>) {
+    fn paint_bars(&self, ui: &Ui, bands: Bands, y_max: f32, active: Option<usize>) {
         let painter = ui.painter();
-        let s = self.series.len();
-        let band = plot.width() / n as f32;
-        let group_w = band * 0.7;
-        let bar_w = group_w / s as f32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let radius = (bar_w * 0.25).min(4.0) as u8;
-        for cat in 0..n {
-            let group_left = Self::category_center(plot, cat, n) - group_w / 2.0;
+        let plot = bands.plot;
+        let group_w = bands.width() * 0.7;
+        let bar_w = group_w / Bands::float(self.series.len());
+        // A quarter of the bar's width, at most 4, truncated.
+        let radius = (0..=4_u8)
+            .rev()
+            .find(|r| f32::from(*r) <= bar_w * 0.25)
+            .unwrap_or(0);
+        for cat in 0..bands.n {
+            let group_left = bands.center(cat) - group_w / 2.0;
             let dim = active.is_some_and(|a| a != cat);
             for (si, series) in self.series.iter().enumerate() {
                 let v = series.values.get(cat).copied().unwrap_or(0.0);
-                let x0 = group_left + bar_w * si as f32;
+                let x0 = bar_w.mul_add(Bands::float(si), group_left);
                 let top = Self::y_of(plot, v, y_max);
                 let bar = Rect::from_min_max(
                     Pos2::new(x0 + 1.0, top),
@@ -368,26 +352,15 @@ impl Chart {
     }
 
     /// Lines (and optionally filled areas) through each series.
-    #[allow(clippy::cast_precision_loss)]
-    fn paint_lines(
-        &self,
-        ui: &Ui,
-        plot: Rect,
-        y_max: f32,
-        n: usize,
-        fill: bool,
-        active: Option<usize>,
-    ) {
+    fn paint_lines(&self, ui: &Ui, bands: Bands, y_max: f32, fill: bool, active: Option<usize>) {
         let painter = ui.painter();
+        let plot = bands.plot;
         for (si, series) in self.series.iter().enumerate() {
             let color = self.color_of(si);
-            let pts: Vec<Pos2> = (0..n)
+            let pts: Vec<Pos2> = (0..bands.n)
                 .map(|cat| {
                     let v = series.values.get(cat).copied().unwrap_or(0.0);
-                    Pos2::new(
-                        Self::category_center(plot, cat, n),
-                        Self::y_of(plot, v, y_max),
-                    )
+                    Pos2::new(bands.center(cat), Self::y_of(plot, v, y_max))
                 })
                 .collect();
 
@@ -431,8 +404,7 @@ impl Chart {
             items.push((i, g, w));
             total += w;
         }
-        #[allow(clippy::cast_precision_loss)]
-        let span = self.series.len().saturating_sub(1) as f32;
+        let span = Bands::float(self.series.len().saturating_sub(1));
         total = gap.mul_add(span, total);
 
         let mut x = area.center().x - total / 2.0;
@@ -450,17 +422,10 @@ impl Chart {
     }
 
     /// A floating tooltip card for the hovered category.
-    fn paint_tooltip(
-        &self,
-        ui: &Ui,
-        tokens: Tokens,
-        m: ChartMetrics,
-        plot: Rect,
-        cat: usize,
-        n: usize,
-    ) {
+    fn paint_tooltip(&self, ui: &Ui, tokens: Tokens, m: ChartMetrics, bands: Bands, cat: usize) {
         let painter = ui.painter();
-        let cx = Self::category_center(plot, cat, n);
+        let plot = bands.plot;
+        let cx = bands.center(cat);
 
         // Vertical guide.
         painter.vline(
@@ -485,14 +450,13 @@ impl Chart {
             let v = s.values.get(cat).copied().unwrap_or(0.0);
             let lg =
                 painter.layout_no_wrap(s.label.clone(), row_font.clone(), tokens.muted_foreground);
-            let vg = painter.layout_no_wrap(format_value(v), row_font.clone(), tokens.foreground);
+            let vg = painter.layout_no_wrap(Value(v).label(), row_font.clone(), tokens.foreground);
             let w = swatch + 5.0 + lg.size().x + 16.0 + vg.size().x;
             max_w = max_w.max(w);
             rows.push((si, lg, vg));
         }
 
-        #[allow(clippy::cast_precision_loss)]
-        let body_h = (rows.len() as f32).mul_add(row_h, title_g.size().y + 4.0);
+        let body_h = Bands::float(rows.len()).mul_add(row_h, title_g.size().y + 4.0);
         let box_h = 2.0f32.mul_add(pad, body_h);
         let box_w = pad.mul_add(2.0, max_w);
 
@@ -541,54 +505,165 @@ impl Chart {
     }
 }
 
-/// Round `peak` up to a tidy axis ceiling (1/2/2.5/5 × 10ⁿ).
-fn nice_ceiling(peak: f32) -> f32 {
-    let mag = 10.0_f32.powf(peak.log10().floor());
-    let norm = peak / mag;
-    let step = if norm <= 1.0 {
-        1.0
-    } else if norm <= 2.0 {
-        2.0
-    } else if norm <= 2.5 {
-        2.5
-    } else if norm <= 5.0 {
-        5.0
-    } else {
-        10.0
-    };
-    step * mag
+/// The plot's categories: `n` equal-width bands across it.
+#[derive(Clone, Copy)]
+struct Bands {
+    plot: Rect,
+    n: usize,
 }
 
-/// Compact y-tick formatting (`1.2k`, `350`).
-fn format_tick(v: f32) -> String {
-    if v >= 1000.0 {
-        format!("{:.1}k", v / 1000.0)
-    } else if v.fract().abs() < 0.05 {
-        format!("{v:.0}")
-    } else {
-        format!("{v:.1}")
+impl Bands {
+    /// A count or index as a float. Charts never approach `u16::MAX`
+    /// categories or series, so saturating there loses nothing.
+    fn float(i: usize) -> f32 {
+        f32::from(u16::try_from(i).unwrap_or(u16::MAX))
+    }
+
+    fn width(self) -> f32 {
+        self.plot.width() / Self::float(self.n)
+    }
+
+    /// The x-centre of category `i`.
+    fn center(self, i: usize) -> f32 {
+        self.width().mul_add(Self::float(i) + 0.5, self.plot.left())
+    }
+
+    /// The category whose band holds `x`, clamped to the last.
+    fn at(self, x: f32) -> usize {
+        let half = self.width() / 2.0;
+        (0..self.n)
+            .find(|&i| x < self.center(i) + half)
+            .unwrap_or_else(|| self.n.saturating_sub(1))
     }
 }
 
-/// Tooltip value formatting (integers stay integral).
-fn format_value(v: f32) -> String {
-    if v.fract().abs() < 0.05 {
-        format!("{v:.0}")
-    } else {
-        format!("{v:.1}")
+/// A data value, as the axis and tooltip present it.
+#[derive(Clone, Copy)]
+struct Value(f32);
+
+impl Value {
+    /// Round up to a tidy axis ceiling (1/2/2.5/5 × 10ⁿ).
+    fn nice_ceiling(self) -> f32 {
+        let mag = 10.0_f32.powf(self.0.log10().floor());
+        let norm = self.0 / mag;
+        let step = [1.0, 2.0, 2.5, 5.0]
+            .into_iter()
+            .find(|s| norm <= *s)
+            .unwrap_or(10.0);
+        step * mag
+    }
+
+    /// Compact y-tick text (`1.2k`, `350`).
+    fn tick(self) -> String {
+        if self.0 >= 1000.0 {
+            format!("{:.1}k", self.0 / 1000.0)
+        } else {
+            self.label()
+        }
+    }
+
+    /// Tooltip text; near-integers stay integral.
+    fn label(self) -> String {
+        let v = self.0;
+        if v.fract().abs() < 0.05 {
+            format!("{v:.0}")
+        } else {
+            format!("{v:.1}")
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::TestUi;
 
     #[test]
     fn nice_ceilings() {
-        assert!((nice_ceiling(186.0) - 200.0).abs() < 0.01);
-        assert!((nice_ceiling(73.0) - 100.0).abs() < 0.01);
-        assert!((nice_ceiling(305.0) - 500.0).abs() < 0.01);
-        assert!((nice_ceiling(21.0) - 25.0).abs() < 0.01);
+        let ceil = |v| Value(v).nice_ceiling();
+        assert!((ceil(186.0) - 200.0).abs() < 0.01);
+        assert!((ceil(73.0) - 100.0).abs() < 0.01);
+        assert!((ceil(305.0) - 500.0).abs() < 0.01);
+        assert!((ceil(21.0) - 25.0).abs() < 0.01);
+        assert!((ceil(100.0) - 100.0).abs() < 0.01);
+        assert!((ceil(800.0) - 1000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn bands_map_x_to_categories() {
+        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 100.0));
+        let bands = Bands { plot, n: 3 };
+        assert!((bands.center(1) - 150.0).abs() < 1e-3);
+        assert_eq!(bands.at(0.0), 0);
+        assert_eq!(bands.at(99.0), 0);
+        assert_eq!(bands.at(101.0), 1);
+        assert_eq!(bands.at(300.0), 2);
+    }
+
+    const MONTHS: [&str; 3] = ["Jan", "Feb", "Mar"];
+
+    fn chart(kind: Kind) -> Chart {
+        Chart::new(kind)
+            .labels(MONTHS)
+            .series(Series::new("Desktop", [186.0, 305.5, 237.0]))
+            .series(Series::new("Mobile", [80.0, 1200.0, 120.0]).color(Color32::RED))
+    }
+
+    /// Render `kind`, then hover the category `label`, returning which texts
+    /// were painted.
+    fn hover(kind: Kind, label: &str) -> (bool, bool) {
+        let ui = TestUi::new();
+        let mut build = |ui: &mut Ui| {
+            chart(kind).show(ui);
+        };
+        let out = ui.frame(&mut build);
+        assert!(!painted(&out, "305.5"), "no tooltip before hover");
+        let x = TestUi::text_rect(&out, label).center().x;
+        let out = ui.frame_with(
+            vec![egui::Event::PointerMoved(Pos2::new(x, 60.0))],
+            &mut build,
+        );
+        (painted(&out, "305.5"), painted(&out, "1200"))
+    }
+
+    fn painted(out: &egui::FullOutput, needle: &str) -> bool {
+        out.shapes.iter().any(|c| match &c.shape {
+            egui::Shape::Text(t) => t.galley.job.text == needle,
+            _ => false,
+        })
+    }
+
+    /// Hovering a category floats a tooltip listing every series' value.
+    #[test]
+    fn hovering_shows_a_tooltip_for_every_kind() {
+        for kind in [Kind::Bar, Kind::Line, Kind::Area] {
+            assert_eq!(hover(kind, "Feb"), (true, true), "{kind:?}");
+        }
+        // The last category's tooltip lists that category's values only.
+        assert_eq!(hover(Kind::Bar, "Mar"), (false, false));
+    }
+
+    /// The y-axis ticks switch to `k` from 1000 up.
+    #[test]
+    fn axis_ticks_abbreviate_thousands() {
+        let out = TestUi::new().frame(|ui| {
+            chart(Kind::Bar).show(ui);
+        });
+        assert!(painted(&out, "1.5k"));
+        assert!(painted(&out, "500"));
+    }
+
+    /// Without labels or series the chart only reserves its space.
+    #[test]
+    fn empty_chart_paints_nothing() {
+        let ui = TestUi::new();
+        let out = ui.frame(|ui| {
+            Chart::new(Kind::Line).legend(false).height(50.0).show(ui);
+        });
+        assert!(!out
+            .shapes
+            .iter()
+            .any(|c| matches!(c.shape, egui::Shape::Text(_))));
     }
 
     #[test]
@@ -605,7 +680,8 @@ mod tests {
 
     #[test]
     fn tick_formatting() {
-        assert_eq!(format_tick(350.0), "350");
-        assert_eq!(format_tick(1200.0), "1.2k");
+        assert_eq!(Value(350.0).tick(), "350");
+        assert_eq!(Value(1200.0).tick(), "1.2k");
+        assert_eq!(Value(2.5).label(), "2.5");
     }
 }

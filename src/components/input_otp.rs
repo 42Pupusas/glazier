@@ -24,7 +24,7 @@
 //! # });
 //! ```
 
-use egui::{Event, Key, Modifiers, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Event, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::sizing::{Sizeable, SizingHook};
 use crate::tokens::Tokens;
@@ -56,6 +56,13 @@ impl Default for InputOtpMetrics {
     }
 }
 
+impl InputOtpMetrics {
+    /// The gap at a group boundary, wide enough for the separator dash.
+    const fn sep_gap(self) -> f32 {
+        2.0_f32.mul_add(self.sep_w, self.group_gap)
+    }
+}
+
 /// Which characters an [`InputOtp`] accepts, mirroring shadcn's three
 /// `input-otp` regex presets (`REGEXP_ONLY_DIGITS`, `…_ONLY_CHARS`,
 /// `…_DIGITS_AND_CHARS`).
@@ -81,13 +88,235 @@ impl OtpMode {
     }
 }
 
-/// Per-field caret state, persisted in egui memory.
-#[derive(Clone, Copy, Default)]
-struct OtpState {
-    /// Caret position — the cell that will receive the next typed character
-    /// (0..=len). At `len` the field is full and the caret rests on the last
-    /// cell.
+/// The code being edited and its caret. Only the caret persists across frames
+/// (in egui memory); the characters are re-read from the bound string.
+struct Editor {
+    chars: Vec<char>,
+    /// The cell that will receive the next typed character (0..=len). At
+    /// `len` the field is full and the caret rests on the last cell.
     caret: usize,
+    len: usize,
+    mode: OtpMode,
+}
+
+impl Editor {
+    /// Normalise `value`: keep only accepted chars, upper-cased, clamped to
+    /// `len`.
+    fn new(value: &str, len: usize, mode: OtpMode, caret: usize) -> Self {
+        let chars: Vec<char> = value
+            .chars()
+            .filter(|&c| mode.accepts(c))
+            .map(|c| c.to_ascii_uppercase())
+            .take(len)
+            .collect();
+        Self {
+            chars,
+            caret: caret.min(len),
+            len,
+            mode,
+        }
+    }
+
+    const fn is_full(&self) -> bool {
+        self.chars.len() == self.len
+    }
+
+    /// Place the caret on cell `i`, clamped to the first empty cell so the
+    /// filled run stays contiguous.
+    fn place(&mut self, i: usize) {
+        self.caret = i.min(self.chars.len());
+    }
+
+    /// Insert one character at the caret, if accepted and there's room.
+    fn feed(&mut self, c: char) {
+        if !self.mode.accepts(c) || self.caret >= self.len {
+            return;
+        }
+        let c = c.to_ascii_uppercase();
+        match self.chars.get_mut(self.caret) {
+            Some(cell) => *cell = c,
+            None => self.chars.push(c),
+        }
+        self.caret += 1;
+    }
+
+    /// Step back and clear the cell before the caret.
+    fn backspace(&mut self) {
+        if self.caret == 0 {
+            return;
+        }
+        self.caret -= 1;
+        if self.caret < self.chars.len() {
+            self.chars.remove(self.caret);
+        }
+    }
+
+    /// Clear the cell under the caret.
+    fn delete(&mut self) {
+        if self.caret < self.chars.len() {
+            self.chars.remove(self.caret);
+        }
+    }
+
+    const fn left(&mut self) {
+        self.caret = self.caret.saturating_sub(1);
+    }
+
+    fn right(&mut self) {
+        self.caret = (self.caret + 1).min(self.chars.len());
+    }
+
+    /// Apply one input event.
+    fn apply(&mut self, ev: &Event) {
+        match ev {
+            // Typed and pasted text both fill cells from the caret; rejected
+            // chars are skipped, so pasting "123-456" works too.
+            Event::Text(t) | Event::Paste(t) => t.chars().for_each(|c| self.feed(c)),
+            Event::Key {
+                key, pressed: true, ..
+            } => self.key(*key),
+            _ => {}
+        }
+    }
+
+    fn key(&mut self, key: Key) {
+        match key {
+            Key::Backspace => self.backspace(),
+            Key::Delete => self.delete(),
+            _ => {}
+        }
+    }
+
+    /// The cell holding the focus ring: the caret, or the last cell when full.
+    fn active_cell(&self) -> usize {
+        self.caret.min(self.len.saturating_sub(1))
+    }
+
+    fn text(&self) -> String {
+        self.chars.iter().collect()
+    }
+}
+
+/// Where the cells and separators sit this frame.
+struct Layout {
+    cells: Vec<Rect>,
+    /// The x centre of each group separator.
+    separators: Vec<f32>,
+}
+
+impl Layout {
+    /// Every cell is `m.cell` square; a separator gap opens at each group
+    /// boundary, a cell gap everywhere else.
+    fn new(origin: egui::Pos2, len: usize, group: Option<usize>, m: InputOtpMetrics) -> Self {
+        let mut cells = Vec::with_capacity(len);
+        let mut separators = Vec::new();
+        let mut x = origin.x;
+        for i in 0..len {
+            if i > 0 && group.is_some_and(|g| i % g == 0) {
+                separators.push(x + m.sep_gap() / 2.0);
+                x += m.sep_gap();
+            } else if i > 0 {
+                x += m.cell_gap;
+            }
+            cells.push(Rect::from_min_size(
+                egui::pos2(x, origin.y),
+                Vec2::splat(m.cell),
+            ));
+            x += m.cell;
+        }
+        Self { cells, separators }
+    }
+
+    fn width(&self) -> f32 {
+        match (self.cells.first(), self.cells.last()) {
+            (Some(first), Some(last)) => last.right() - first.left(),
+            _ => 0.0,
+        }
+    }
+
+    /// The cell clicked this frame, if any.
+    fn clicked(&self, ui: &Ui, id: Id) -> Option<usize> {
+        self.cells.iter().enumerate().fold(None, |hit, (i, r)| {
+            let clicked = ui
+                .interact(*r, id.with(("cell", i)), Sense::click())
+                .clicked();
+            if clicked {
+                Some(i)
+            } else {
+                hit
+            }
+        })
+    }
+}
+
+/// Paints one frame of the field.
+struct Painter<'a> {
+    ui: &'a Ui,
+    tokens: Tokens,
+    m: InputOtpMetrics,
+}
+
+impl Painter<'_> {
+    /// Paint every cell and separator. `editor` is `Some` while focused.
+    fn paint(&self, layout: &Layout, chars: &[char], editor: Option<&Editor>) {
+        // The caret blinks at 1 Hz while focused.
+        let blink = self.ui.input(|i| i.time).fract() < 0.5;
+        for (i, rect) in layout.cells.iter().enumerate() {
+            let active = editor.is_some_and(|e| e.active_cell() == i);
+            let caret = blink && editor.is_some_and(|e| e.caret == i);
+            self.cell(*rect, chars.get(i).copied(), active, caret);
+        }
+        let cy = layout.cells.first().map_or(0.0, |c| c.center().y);
+        for cx in &layout.separators {
+            self.ui.painter().hline(
+                (cx - self.m.sep_w)..=(cx + self.m.sep_w),
+                cy,
+                Stroke::new(2.0, self.tokens.muted_foreground),
+            );
+        }
+        if editor.is_some() {
+            self.ui
+                .ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
+    /// One cell: chrome, then its glyph or, when empty and due, the caret.
+    fn cell(&self, rect: Rect, ch: Option<char>, active: bool, caret: bool) {
+        let tokens = self.tokens;
+        // Active cell takes the focus ring; others a hairline `input` border.
+        let stroke = if active {
+            Stroke::new(2.0, tokens.ring)
+        } else {
+            Stroke::new(1.0, tokens.input)
+        };
+        // Opaque `widget` surface — `background` is the app-canvas token and
+        // may be translucent under a user theme.
+        self.ui.painter().rect(
+            rect,
+            tokens.radius_md(),
+            tokens.widget,
+            stroke,
+            StrokeKind::Inside,
+        );
+        let c = rect.center();
+        if let Some(ch) = ch {
+            let galley = self.ui.painter().layout_no_wrap(
+                ch.to_string(),
+                egui::FontId::proportional(self.m.text),
+                tokens.foreground,
+            );
+            let pos = c - galley.size() / 2.0;
+            self.ui.painter().galley(pos, galley, tokens.foreground);
+        } else if caret {
+            let h = self.m.text * 0.3;
+            self.ui.painter().vline(
+                c.x,
+                (c.y - h)..=(c.y + h),
+                Stroke::new(2.0, tokens.foreground),
+            );
+        }
+    }
 }
 
 /// A segmented one-time-code input bound to a `&mut String`.
@@ -115,7 +344,7 @@ impl<'a> InputOtp<'a> {
             len,
             group: None,
             mode: OtpMode::Digits,
-            id_salt: egui::Id::new("glazier-input-otp"),
+            id_salt: egui::Id::unique("glazier-input-otp"),
             sizing_hook: SizingHook::new(),
         }
     }
@@ -146,13 +375,8 @@ impl<'a> InputOtp<'a> {
 
     /// Set a stable id salt (needed if several OTP fields share a parent).
     pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id_salt = egui::Id::new(salt);
+        self.id_salt = egui::Id::unique(salt);
         self
-    }
-
-    /// Is `c` an accepted character for this field?
-    const fn accepts(&self, c: char) -> bool {
-        self.mode.accepts(c)
     }
 
     /// Render the field. Returns `true` the frame the code becomes complete
@@ -161,274 +385,168 @@ impl<'a> InputOtp<'a> {
         let tokens = Tokens::get(ui);
         let m = crate::sizing::resolve(std::mem::take(&mut self.sizing_hook));
         let id = ui.make_persistent_id(self.id_salt);
+        let caret = ui.data(|d| d.get_temp(id).unwrap_or_default());
+        let mut editor = Editor::new(self.value, self.len, self.mode, caret);
 
-        // Normalise the bound string: keep only accepted chars, clamp to len.
-        let mut chars: Vec<char> = self
-            .value
-            .chars()
-            .filter(|&c| self.accepts(c))
-            .map(|c| c.to_ascii_uppercase())
-            .take(self.len)
-            .collect();
-
-        // Geometry: cells, plus a gap wherever a group boundary falls.
         let group = self.group.filter(|&g| g > 0);
-        let n_seps = group.map_or(0, |g| self.len.saturating_sub(1) / g);
-        let sep_gap = 2.0_f32.mul_add(m.sep_w, m.group_gap);
-        // Inner gaps: a `sep_gap` at each group boundary, a `cell_gap` between
-        // every other pair of adjacent cells.
-        let n_cell_gaps = self.len.saturating_sub(1).saturating_sub(n_seps);
-        #[allow(clippy::cast_precision_loss)]
-        let total_w = (self.len as f32).mul_add(
-            m.cell,
-            (n_seps as f32).mul_add(sep_gap, n_cell_gaps as f32 * m.cell_gap),
-        );
+        let probe = Layout::new(egui::Pos2::ZERO, self.len, group, m);
         let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(total_w, m.cell), Sense::click());
-        let focused = response.has_focus();
+            ui.allocate_exact_size(Vec2::new(probe.width(), m.cell), Sense::click());
+        let layout = Layout::new(rect.min, self.len, group, m);
 
-        let mut state: OtpState = ui.data(|d| d.get_temp(id).unwrap_or_default());
-        state.caret = state.caret.min(self.len);
-
-        // Compute each cell's rect (left-to-right, inserting separator gaps).
-        let mut cell_rects = Vec::with_capacity(self.len);
-        let mut x = rect.left();
-        for i in 0..self.len {
-            if i > 0 {
-                x += if group.is_some_and(|g| i % g == 0) {
-                    sep_gap
-                } else {
-                    m.cell_gap
-                };
-            }
-            cell_rects.push(egui::Rect::from_min_size(
-                egui::pos2(x, rect.top()),
-                Vec2::splat(m.cell),
-            ));
-            x += m.cell;
+        let was_focused = response.has_focus();
+        if let Some(i) = layout.clicked(ui, id) {
+            editor.place(i);
+            response.request_focus();
         }
-
-        // Click a cell to focus and place the caret there (clamped to the first
-        // empty cell so you can't edit past the filled run).
-        for (i, cr) in cell_rects.iter().enumerate() {
-            let r = ui.interact(*cr, id.with(("cell", i)), Sense::click());
-            if r.clicked() {
-                state.caret = i.min(chars.len());
-                response.request_focus();
-            }
-        }
-        if response.clicked() && !focused {
-            state.caret = chars.len();
+        if response.clicked() && !was_focused {
+            editor.place(self.len);
             response.request_focus();
         }
 
-        let was_full = chars.len() == self.len;
-
-        if response.has_focus() {
-            // Keep the horizontal arrows for caret movement.
-            ui.memory_mut(|m| {
-                m.set_focus_lock_filter(
-                    response.id,
-                    egui::EventFilter {
-                        tab: false,
-                        horizontal_arrows: true,
-                        vertical_arrows: false,
-                        escape: false,
-                    },
-                );
-            });
-            self.handle_keys(ui, &mut chars, &mut state);
+        let was_full = editor.is_full();
+        let focused = response.has_focus();
+        if focused {
+            Self::edit(ui, response.id, &mut editor);
         }
-
-        // Write the (possibly mutated) characters back into the bound string.
-        let new_value: String = chars.iter().collect();
-        if *self.value != new_value {
-            *self.value = new_value;
+        let text = editor.text();
+        if *self.value != text {
+            *self.value = text;
         }
 
         if ui.is_rect_visible(rect) {
-            self.paint(ui, tokens, m, &cell_rects, &chars, state, focused, sep_gap);
+            Painter { ui, tokens, m }.paint(&layout, &editor.chars, focused.then_some(&editor));
         }
+        ui.data_mut(|d| d.insert_temp(id, editor.caret));
 
-        ui.data_mut(|d| d.insert_temp(id, state));
-
-        let full = chars.len() == self.len;
-        if full && (*self.value).chars().count() == self.len {
+        let full = editor.is_full();
+        if full {
             response.mark_changed();
         }
         // "Just completed" edge.
         full && !was_full
     }
 
-    /// Paint all cells and the group separators.
-    #[allow(clippy::too_many_arguments)]
-    fn paint(
-        &self,
-        ui: &Ui,
-        tokens: Tokens,
-        m: InputOtpMetrics,
-        cell_rects: &[egui::Rect],
-        chars: &[char],
-        state: OtpState,
-        focused: bool,
-        sep_gap: f32,
-    ) {
-        let blink = ui.input(|i| i.time).fract() < 0.5;
-        for (i, cr) in cell_rects.iter().enumerate() {
-            paint_cell(
-                ui,
-                tokens,
-                m,
-                *cr,
-                chars.get(i).copied(),
-                CellState {
-                    active: focused && i == state.caret.min(self.len - 1),
-                    caret_on: focused && i == state.caret && state.caret < self.len && blink,
+    /// Process caret keys and typed text for one frame.
+    fn edit(ui: &Ui, widget: Id, editor: &mut Editor) {
+        // Keep the horizontal arrows for caret movement.
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                widget,
+                egui::EventFilter {
+                    tab: false,
+                    horizontal_arrows: true,
+                    vertical_arrows: false,
+                    escape: false,
                 },
             );
-        }
-        // Group separators (an en-dash between groups).
-        if let Some(g) = self.group.filter(|&g| g > 0) {
-            let n_seps = self.len.saturating_sub(1) / g;
-            for sep in 1..=n_seps {
-                let between = cell_rects[sep * g - 1].right();
-                let cx = between + sep_gap / 2.0;
-                let cy = cell_rects[0].center().y;
-                ui.painter().hline(
-                    (cx - m.sep_w)..=(cx + m.sep_w),
-                    cy,
-                    Stroke::new(2.0, tokens.muted_foreground),
-                );
-            }
-        }
-        // Repaint to animate the caret blink while focused.
-        if focused {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(500));
-        }
-    }
-
-    /// Process text / editing keys for one frame.
-    fn handle_keys(&self, ui: &Ui, chars: &mut Vec<char>, state: &mut OtpState) {
-        // Caret movement.
-        let (mut left, mut right) = (false, false);
-        ui.input_mut(|i| {
-            left = i.consume_key(Modifiers::NONE, Key::ArrowLeft);
-            right = i.consume_key(Modifiers::NONE, Key::ArrowRight);
+        });
+        let [left, right] = ui.input_mut(|i| {
+            [Key::ArrowLeft, Key::ArrowRight].map(|key| i.consume_key(Modifiers::NONE, key))
         });
         if left {
-            state.caret = state.caret.saturating_sub(1);
+            editor.left();
         }
         if right {
-            state.caret = (state.caret + 1).min(chars.len().min(self.len));
+            editor.right();
         }
-
-        let events = ui.input(|i| i.events.clone());
-        for ev in events {
-            match ev {
-                // Typed characters and pasted text both fill cells from the
-                // caret (paste skips rejected chars, so "123-456" works too).
-                Event::Text(t) | Event::Paste(t) => {
-                    for c in t.chars() {
-                        self.feed_char(chars, state, c);
-                    }
-                }
-                Event::Key {
-                    key: Key::Backspace,
-                    pressed: true,
-                    ..
-                } => {
-                    if state.caret > 0 && state.caret == chars.len() {
-                        // Caret at the end: pop the last char.
-                        chars.pop();
-                        state.caret -= 1;
-                    } else if state.caret > 0 {
-                        // Caret mid-run: step back and remove that cell.
-                        state.caret -= 1;
-                        if state.caret < chars.len() {
-                            chars.remove(state.caret);
-                        }
-                    }
-                }
-                Event::Key {
-                    key: Key::Delete,
-                    pressed: true,
-                    ..
-                } if state.caret < chars.len() => {
-                    chars.remove(state.caret);
-                }
-                _ => {}
-            }
-        }
-        state.caret = state.caret.min(self.len);
-    }
-
-    /// Insert one character at the caret, if accepted and there's room.
-    fn feed_char(&self, chars: &mut Vec<char>, state: &mut OtpState, c: char) {
-        if !self.accepts(c) || state.caret >= self.len {
-            return;
-        }
-        let c = c.to_ascii_uppercase();
-        if state.caret < chars.len() {
-            chars[state.caret] = c;
-        } else {
-            chars.push(c);
-        }
-        state.caret = (state.caret + 1).min(self.len);
+        ui.input(|i| i.events.iter().for_each(|ev| editor.apply(ev)));
     }
 }
 
-/// Transient per-cell paint flags.
-#[derive(Clone, Copy)]
-struct CellState {
-    active: bool,
-    caret_on: bool,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
 
-/// Paint one OTP cell: chrome, optional glyph, optional caret.
-fn paint_cell(
-    ui: &Ui,
-    tokens: Tokens,
-    m: InputOtpMetrics,
-    rect: egui::Rect,
-    ch: Option<char>,
-    cell: CellState,
-) {
-    // Active cell takes the focus ring; others a hairline `input` border.
-    let stroke = if cell.active {
-        Stroke::new(2.0, tokens.ring)
-    } else {
-        Stroke::new(1.0, tokens.input)
-    };
-    // Opaque `widget` surface — `background` is the app-canvas token and may
-    // be translucent under a user theme.
-    ui.painter().rect(
-        rect,
-        tokens.radius_md(),
-        tokens.widget,
-        stroke,
-        StrokeKind::Inside,
-    );
+    fn editor(value: &str, caret: usize) -> Editor {
+        Editor::new(value, 6, OtpMode::Digits, caret)
+    }
 
-    if let Some(c) = ch {
-        let galley = ui.painter().layout_no_wrap(
-            c.to_string(),
-            egui::FontId::proportional(m.text),
-            tokens.foreground,
-        );
-        let pos = egui::pos2(
-            rect.center().x - galley.size().x / 2.0,
-            rect.center().y - galley.size().y / 2.0,
-        );
-        ui.painter().galley(pos, galley, tokens.foreground);
-    } else if cell.caret_on {
-        // Blinking caret in an empty active cell.
-        let cy = rect.center().y;
-        let h = m.text * 0.6;
-        ui.painter().vline(
-            rect.center().x,
-            (cy - h / 2.0)..=(cy + h / 2.0),
-            Stroke::new(2.0, tokens.foreground),
-        );
+    #[test]
+    fn normalises_the_bound_value() {
+        let e = Editor::new("ab-12cd34ef", 4, OtpMode::Alphanumeric, 9);
+        assert_eq!(e.text(), "AB12");
+        assert_eq!(e.caret, 4);
+        assert_eq!(Editor::new("a1b2", 6, OtpMode::Letters, 0).text(), "AB");
+        assert_eq!(editor("12-34", 0).text(), "1234");
+    }
+
+    #[test]
+    fn typing_fills_and_stops_when_full() {
+        let mut e = editor("", 0);
+        e.apply(&Event::Paste("123-4567".to_owned()));
+        assert_eq!(e.text(), "123456");
+        assert!(e.is_full());
+        assert_eq!(e.active_cell(), 5);
+    }
+
+    #[test]
+    fn typing_overwrites_mid_run() {
+        let mut e = editor("1234", 0);
+        e.place(1);
+        e.feed('9');
+        assert_eq!(e.text(), "1934");
+        assert_eq!(e.caret, 2);
+    }
+
+    #[test]
+    fn backspace_and_delete_clear_cells() {
+        let mut e = editor("1234", 4);
+        e.apply(&TestUi::key(Key::Backspace));
+        assert_eq!((e.text().as_str(), e.caret), ("123", 3));
+        e.left();
+        e.left();
+        e.apply(&TestUi::key(Key::Delete));
+        assert_eq!((e.text().as_str(), e.caret), ("13", 1));
+        e.apply(&TestUi::key(Key::Backspace));
+        assert_eq!((e.text().as_str(), e.caret), ("3", 0));
+        e.apply(&TestUi::key(Key::Backspace));
+        assert_eq!(e.text(), "3");
+    }
+
+    #[test]
+    fn caret_never_passes_the_filled_run() {
+        let mut e = editor("12", 0);
+        e.place(5);
+        assert_eq!(e.caret, 2);
+        e.right();
+        assert_eq!(e.caret, 2);
+    }
+
+    #[test]
+    fn layout_opens_a_gap_per_group() {
+        let m = InputOtpMetrics::default();
+        let grouped = Layout::new(egui::Pos2::ZERO, 6, Some(3), m);
+        let plain = Layout::new(egui::Pos2::ZERO, 6, None, m);
+        assert_eq!(grouped.separators.len(), 1);
+        assert_eq!(plain.separators.len(), 0);
+        assert!((grouped.width() - plain.width() - (m.sep_gap() - m.cell_gap)).abs() < 1e-3);
+        assert!(Layout::new(egui::Pos2::ZERO, 0, None, m).width().abs() < f32::EPSILON);
+    }
+
+    /// Clicking the field, then typing, completes the code exactly once.
+    #[test]
+    fn typing_into_the_field_completes_it() {
+        let ui = TestUi::new();
+        let mut code = String::new();
+        let mut completions = 0;
+        {
+            let mut build = |ui: &mut Ui| {
+                completions += u8::from(InputOtp::new(&mut code, 4).group(2).show(ui));
+            };
+            // egui hit-tests against the previous frame's widgets.
+            ui.frame(&mut build);
+            // The field is the first widget, so its first cell sits at the
+            // panel's top-left corner.
+            ui.click(egui::pos2(16.0, 16.0), &mut build);
+            ui.frame_with(vec![Event::Text("12".to_owned())], &mut build);
+            ui.frame_with(vec![TestUi::key(Key::ArrowLeft)], &mut build);
+            ui.frame_with(vec![TestUi::key(Key::ArrowRight)], &mut build);
+            ui.frame_with(vec![Event::Paste("3-4".to_owned())], &mut build);
+            ui.frame(&mut build);
+        }
+        assert_eq!(code, "1234");
+        assert_eq!(completions, 1);
     }
 }

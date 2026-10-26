@@ -71,6 +71,26 @@ struct HoverState {
     card_hovered: bool,
 }
 
+impl HoverState {
+    /// Advance the open/close timer at `now`. While the pointer's presence
+    /// (`active`) disagrees with `open`, a timer runs for `delay` seconds and
+    /// then flips it. Returns the seconds still to wait, if a timer is running.
+    fn tick(&mut self, active: bool, now: f64, delay: f64) -> Option<f64> {
+        if active == self.open {
+            self.pending_since = None;
+            return None;
+        }
+        let start = *self.pending_since.get_or_insert(now);
+        let remaining = delay - (now - start);
+        if remaining <= 0.0 {
+            self.open = active;
+            self.pending_since = None;
+            return None;
+        }
+        Some(remaining)
+    }
+}
+
 /// A rich hover-triggered popover panel.
 #[must_use = "hover cards do nothing unless you show them"]
 pub struct HoverCard {
@@ -161,23 +181,10 @@ impl HoverCard {
         // "Active" = pointer over the trigger or over the card (last frame).
         let active = response.hovered() || state.card_hovered;
         let delay = f64::from(if state.open { close_delay } else { open_delay });
-
-        // Drive the little open/close state machine. While `active` matches the
-        // direction we'd transition toward, run a timer; when it elapses, flip.
-        let wants_change = active != state.open;
-        if wants_change {
-            let start = state.pending_since.get_or_insert(now);
-            if now - *start >= delay {
-                state.open = active;
-                state.pending_since = None;
-            } else {
-                // Wake exactly when the delay is due — a still pointer stops
-                // generating events, which would otherwise starve the timer.
-                let remaining = (delay - (now - *start)).max(0.0);
-                ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
-            }
-        } else {
-            state.pending_since = None;
+        if let Some(remaining) = state.tick(active, now, delay) {
+            // Wake exactly when the delay is due — a still pointer stops
+            // generating events, which would otherwise starve the timer.
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
         }
 
         let t = ctx.animate_bool_with_time(id, state.open, m.fade_time);
@@ -189,25 +196,8 @@ impl HoverCard {
         }
 
         let tokens = Tokens::get(ui);
-        let anchor = response.rect;
         let width = self.width.unwrap_or(m.default_width);
-
-        // Prefer opening below; flip above when the trigger sits near the
-        // screen bottom and there's more room up top.
-        let screen = ctx.content_rect();
-        let below =
-            screen.bottom() - anchor.bottom() > 160.0 || anchor.top() - screen.top() < 160.0;
-        let (pivot, pivot_pos) = if below {
-            (
-                egui::Align2::LEFT_TOP,
-                anchor.left_bottom() + Vec2::new(0.0, gap),
-            )
-        } else {
-            (
-                egui::Align2::LEFT_BOTTOM,
-                anchor.left_top() - Vec2::new(0.0, gap),
-            )
-        };
+        let (pivot, pivot_pos) = Self::placement(ctx.content_rect(), response.rect, gap);
 
         // Opaque `widget` (popover) surface — `background` is the app-canvas
         // token and may be translucent under a user theme; `card` is reserved
@@ -244,5 +234,87 @@ impl HoverCard {
         ctx.memory_mut(|m| m.data.insert_temp(id, state));
 
         Some(inner.inner)
+    }
+
+    /// Where the card hangs: below the trigger, or above it when the trigger
+    /// sits near the screen bottom and there is more room up top.
+    fn placement(screen: egui::Rect, anchor: egui::Rect, gap: f32) -> (egui::Align2, egui::Pos2) {
+        let below =
+            screen.bottom() - anchor.bottom() > 160.0 || anchor.top() - screen.top() < 160.0;
+        if below {
+            (
+                egui::Align2::LEFT_TOP,
+                anchor.left_bottom() + Vec2::new(0.0, gap),
+            )
+        } else {
+            (
+                egui::Align2::LEFT_BOTTOM,
+                anchor.left_top() - Vec2::new(0.0, gap),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::TestUi;
+
+    #[test]
+    fn the_timer_opens_after_the_delay_and_cancels_on_leave() {
+        let mut s = HoverState::default();
+        assert_eq!(s.tick(true, 0.0, 0.5), Some(0.5));
+        assert_eq!(s.tick(true, 0.2, 0.5), Some(0.3));
+        // Leaving before the delay cancels the pending open.
+        assert_eq!(s.tick(false, 0.3, 0.5), None);
+        assert!(!s.open && s.pending_since.is_none());
+        s.tick(true, 1.0, 0.5);
+        assert_eq!(s.tick(true, 1.5, 0.5), None);
+        assert!(s.open);
+    }
+
+    #[test]
+    fn the_card_flips_above_near_the_bottom() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let top = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::splat(20.0));
+        let bottom = egui::Rect::from_min_size(egui::pos2(10.0, 560.0), Vec2::splat(20.0));
+        assert_eq!(
+            HoverCard::placement(screen, top, 8.0).0,
+            egui::Align2::LEFT_TOP
+        );
+        let (pivot, pos) = HoverCard::placement(screen, bottom, 8.0);
+        assert_eq!(pivot, egui::Align2::LEFT_BOTTOM);
+        assert!((pos.y - 552.0).abs() < f32::EPSILON);
+    }
+
+    /// Resting on the trigger opens the card; leaving closes it.
+    #[test]
+    fn hovering_the_trigger_opens_the_card() {
+        let ui = TestUi::new();
+        let shown = std::cell::Cell::new(false);
+        let mut build = |ui: &mut Ui| {
+            let trigger = ui.button("@peduarte");
+            let open = HoverCard::new()
+                .open_delay(0.05)
+                .close_delay(0.05)
+                .gap(4.0)
+                .width(200.0)
+                .show(ui, &trigger, |ui| ui.label("Pedro"))
+                .is_some();
+            shown.set(open);
+        };
+        let out = ui.frame(&mut build);
+        let over = TestUi::text_rect(&out, "@peduarte").center();
+        ui.frame_with(vec![egui::Event::PointerMoved(over)], &mut build);
+        for _ in 0..10 {
+            ui.frame(&mut build);
+        }
+        assert!(shown.get());
+        let away = egui::pos2(700.0, 500.0);
+        ui.frame_with(vec![egui::Event::PointerMoved(away)], &mut build);
+        for _ in 0..30 {
+            ui.frame(&mut build);
+        }
+        assert!(!shown.get());
     }
 }
