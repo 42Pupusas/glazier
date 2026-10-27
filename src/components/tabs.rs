@@ -85,8 +85,8 @@ pub struct TabsResponse {
     /// Index of the trigger clicked this frame, if any (already applied to the
     /// bound active index).
     pub clicked: Option<usize>,
-    /// Index whose trailing `✕` was clicked this frame (only when
-    /// [`closable`](Tabs::closable)).
+    /// Index whose trailing `✕` was clicked, or that was middle-clicked, this
+    /// frame (only when [`closable`](Tabs::closable)).
     pub closed: Option<usize>,
     /// A drag-reorder this frame as `(from, to)` display indices to swap (only
     /// when [`reorderable`](Tabs::reorderable)). Apply it to your own list.
@@ -156,7 +156,8 @@ impl<'a> Tabs<'a> {
         }
     }
 
-    /// Draw a trailing `✕` on each trigger; the closed index is reported via
+    /// Draw a trailing `✕` on each trigger and close on middle-click, as
+    /// editors and browsers do; the closed index is reported via
     /// [`TabsResponse::closed`].
     pub const fn closable(mut self, closable: bool) -> Self {
         self.closable = closable;
@@ -434,7 +435,8 @@ impl Strip {
         if self.opts.reorderable {
             out.reordered = self.drag(ui, i, &resp).or(out.reordered);
         }
-        if close.is_some_and(|c| self.close_button(ui, i, c)) {
+        let middle = close.is_some() && resp.clicked_by(egui::PointerButton::Middle);
+        if middle || close.is_some_and(|c| self.close_button(ui, i, c)) {
             out.closed = Some(i);
         }
         if ui.is_rect_visible(seg) {
@@ -609,6 +611,31 @@ mod tests {
         rig.run(|ui, build| ui.click(cross, build));
         assert_eq!(rig.closed, Some(2));
         assert_eq!(rig.active, 0);
+    }
+
+    #[test]
+    fn middle_clicking_a_trigger_reports_a_close() {
+        let mut rig = Rig::default();
+        let password = rig.label("Password").center();
+        rig.run(|ui, build| ui.click_with(egui::PointerButton::Middle, password, build));
+        assert_eq!(rig.closed, Some(1));
+        assert_eq!(rig.active, 0, "a middle-click must not select");
+    }
+
+    #[test]
+    fn middle_clicking_a_fixed_tab_does_nothing() {
+        let ui = TestUi::new();
+        let mut active = 0;
+        let mut closed = None;
+        let mut build = |ui: &mut Ui| {
+            closed = Tabs::new(&mut active, LABELS)
+                .list_response(ui)
+                .closed
+                .or(closed);
+        };
+        let password = TestUi::text_rect(&ui.frame(&mut build), "Password").center();
+        ui.click_with(egui::PointerButton::Middle, password, &mut build);
+        assert_eq!(closed, None);
     }
 
     #[test]

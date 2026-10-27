@@ -44,10 +44,20 @@ impl TestUi {
 
     /// Press and release the primary button at `pos`, over two frames, so
     /// widgets see a complete click.
-    pub fn click(&self, pos: Pos2, mut build: impl FnMut(&mut Ui)) -> FullOutput {
+    pub fn click(&self, pos: Pos2, build: impl FnMut(&mut Ui)) -> FullOutput {
+        self.click_with(egui::PointerButton::Primary, pos, build)
+    }
+
+    /// Press and release `button` at `pos`, over two frames.
+    pub fn click_with(
+        &self,
+        button: egui::PointerButton,
+        pos: Pos2,
+        mut build: impl FnMut(&mut Ui),
+    ) -> FullOutput {
         let button = |pressed| Event::PointerButton {
             pos,
-            button: egui::PointerButton::Primary,
+            button,
             pressed,
             modifiers: Modifiers::NONE,
         };
